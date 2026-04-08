@@ -76,7 +76,7 @@ const AuthPage = () => {
 
         if (error) throw error;
 
-        window.location.reload();
+        navigate('/');
       }
     } catch (error) {
       setErrorMsg(error.message);
@@ -127,8 +127,15 @@ const AuthPage = () => {
     <div className="min-h-screen flex">
 
       {/* Left Image / Branding */}
-      <div className="hidden lg:flex w-1/2 bg-gradient-to-br from-black to-gray-800 text-white items-center justify-center">
-        <h1 className="text-4xl font-bold">Your Brand</h1>
+      <div
+        className="hidden lg:flex w-1/2 text-white items-center justify-center bg-cover bg-center"
+        style={{
+          backgroundImage: `url('https://dwyuljlhdtpcebfmkfer.supabase.co/storage/v1/object/public/images/IMG_3729.JPG' )`
+        }}
+      >
+        <h1 className="text-4xl font-bold px-6 py-3 rounded-lg">
+          Sapna Munoth
+        </h1>
       </div>
 
       {/* Form */}
