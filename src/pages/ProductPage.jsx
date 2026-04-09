@@ -26,6 +26,16 @@ const ProductPage = () => {
   const [newComment, setNewComment] = useState("");
   const [submittingReview, setSubmittingReview] = useState(false);
   const [hoverRating, setHoverRating] = useState(0); // For star hover effect
+  const [open, setOpen] = useState(false);
+
+  const sizeChart = [
+    { label: "Chest / Bust", XS: 32, S: 34, M: 36, L: 38, XL: 40, XXL: 42, XXXL: 44 },
+    { label: "Shoulder", XS: 14, S: 14.5, M: 15, L: 15.5, XL: 16, XXL: 16.5, XXXL: 17 },
+    { label: "Waist", XS: 26, S: 28, M: 30, L: 32, XL: 34, XXL: 36, XXXL: 38 },
+    { label: "Hips", XS: 34, S: 36, M: 38, L: 40, XL: 42, XXL: 44, XXXL: 46 }
+  ];
+
+  const sizes = ["XS", "S", "M", "L", "XL", "XXL", "XXXL"];
 
   // --- 1. FETCH DATA ---
   useEffect(() => {
@@ -92,24 +102,29 @@ const ProductPage = () => {
     reviewsRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const selectedSizeObj = product?.sizes?.find(
+    (s) => s.id === selectedSize
+  );
+
   const handleWhatsApp = () => {
     if (!product) return;
 
     const phone = "9885033462"; // replace with owner's number
 
     const message = `
-Hi, I'm interested in this product:
+      Hi, I'm interested in this product:
 
-Name: ${product.name}
-Category: ${product.category?.name || "N/A"}
-Price: ${formatPrice(product.price)}
-Link: ${window.location.href}
+      Name: ${product.name}
+      Category: ${product.category?.name || "N/A"}
+      Price: ${formatPrice(product.price)}
+      Size: ${selectedSizeObj?.size || "Not selected"}
+      Link: ${window.location.href}
 
-Can I customize this?
-    `;
+      Can I customize this?
+          `;
 
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
-  };
+          window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
+    };
 
     /*const handleAddToCart = async () => {
     if (!product) return;
@@ -235,6 +250,26 @@ Can I customize this?
   if (loading) return <div className="pt-40 text-center text-gray-500">Loading product details...</div>;
   if (!product) return <div className="pt-40 text-center text-red-500">Product not found.</div>;
 
+  const sortSizes = (sizes) => {
+    const predefinedOrder = ['XS','S','M','L','XL','XXL','XXXL'];
+
+    return [...sizes].sort((a, b) => {
+      const aIndex = predefinedOrder.indexOf(a.size);
+      const bIndex = predefinedOrder.indexOf(b.size);
+
+      // If both sizes exist in predefined list
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+
+      // If only one exists in list
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+
+      // Fallback: alphabetical
+      return a.size.localeCompare(b.size);
+  });
+};
   return (
     <div className="bg-white pt-32 pb-20">
       {/* Breadcrumbs */}
@@ -284,17 +319,56 @@ Can I customize this?
             <div className="mb-8">
               <div className="flex justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-widest">Size</span>
-                <button className="text-xs underline text-gray-500">Size Guide</button>
+                <button onClick={() => setOpen(true)}
+                className="text-sm underline text-gray-700">Size Guide</button>
+                {open && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
+                    <div className="bg-white p-6 rounded-lg max-w-lg w-full">
+
+                      <h2 className="text-lg font-semibold mb-4">Size Guide</h2>
+
+                      <table className="w-full text-sm border">
+                        <thead>
+                          <tr>
+                            <th className="border p-2"></th>
+                            {sizes.map(size => (
+                              <th key={size} className="border p-2">{size}</th>
+                            ))}
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {sizeChart.map(row => (
+                            <tr key={row.label}>
+                              <td className="border p-2 font-medium">{row.label}</td>
+                              {sizes.map(size => (
+                                <td key={size} className="border p-2">
+                                  {row[size]}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      <button
+                        onClick={() => setOpen(false)}
+                        className="mt-4 w-full bg-black text-white py-2 rounded"
+                      >
+                        Close
+                      </button>
+
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex gap-3">
-                {product.sizes.map((sizeObj) => (
+                {sortSizes(product.sizes).map((sizeObj) => (
                   <button
                     key={sizeObj.id}
-                    onClick={() => setSelectedSize(sizeObj.size)}
-                    disabled={sizeObj.stock <= 0}
+                    onClick={() => setSelectedSize(sizeObj.id)}
                     className={`w-12 h-12 flex items-center justify-center border text-sm transition-all
-                      ${sizeObj.stock <= 0 ? 'opacity-50 cursor-not-allowed bg-gray-100 text-gray-400' : ''}
-                      ${selectedSize === sizeObj.size ? 'border-black bg-black text-white' : 'border-gray-200 hover:border-black text-gray-900'}`}
+                      ${selectedSize === sizeObj.id ? 'border-black bg-black text-white' : 'border-gray-200 hover:border-black text-gray-900'}`}
                   >
                     {sizeObj.size}
                   </button>
@@ -329,9 +403,13 @@ Can I customize this?
           <div className="mb-8">
             <button
               onClick={handleWhatsApp}
-              className="w-full border border-green-600 text-green-600 py-4 uppercase tracking-[0.2em] text-xs font-bold hover:bg-green-600 hover:text-white transition-colors"
+              disabled={product.sizes.length > 0 && !selectedSize}
+              className={`w-full border border-green-600 py-4 uppercase tracking-[0.2em] text-xs font-bold transition-colors
+                ${product.sizes.length > 0 && !selectedSize 
+                  ? 'opacity-50 cursor-not-allowed text-black border-gray-300'
+                  : 'text-white bg-green-400 hover:bg-white hover:text-green-700 hover:border-green-700'}`}
             >
-              Customize on WhatsApp
+              {'Customize on WhatsApp'}
             </button>
           </div>
         </div>
