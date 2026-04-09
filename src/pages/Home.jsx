@@ -100,15 +100,6 @@ const Home = () => {
 useEffect(() => {
   const fetchReviews = async () => {
     try {
-      // 🔥 Wait for session properly
-      const { data: { session } } = await supabase.auth.getSession();
-
-      // If no session, don't call protected query
-      if (!session) {
-        console.log("No session yet, skipping reviews fetch");
-        return;
-      }
-
       const { data, error } = await supabase
         .from('Review')
         .select(`
@@ -118,33 +109,20 @@ useEffect(() => {
           user:User (fullName),
           product:Product (name)
         `)
-        .limit(3)
-        .order('id', { ascending: false });
+        .order('id', { ascending: false })
+        .limit(3);
 
       if (error) {
         console.error('Error fetching reviews:', error);
       } else {
         setReviews(data);
       }
-
     } catch (err) {
       console.error("Unexpected error:", err);
     }
   };
 
-  // 🔥 Listen for auth state (VERY IMPORTANT)
-  const { data: listener } = supabase.auth.onAuthStateChange(
-    (event, session) => {
-      if (session) {
-        fetchReviews();
-      }
-    }
-  );
-
-  // Also try once immediately
   fetchReviews();
-
-  return () => listener.subscription.unsubscribe();
 }, []);
 
   
