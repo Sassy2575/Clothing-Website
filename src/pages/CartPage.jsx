@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Minus, Plus, Trash2, ArrowRight, Lock, Loader2 } from 'lucide-react';
+import { Minus, Plus, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 
@@ -7,7 +7,6 @@ const CartPage = () => {
   const [cartItems, setCartItems] = useState([]);
   const [subtotal, setSubtotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [user, setUser] = useState(null);
 
   // 🔹 Fetch Cart
@@ -46,7 +45,6 @@ const CartPage = () => {
         if (error) throw error;
 
         setCartItems(data || []);
-
       } catch (error) {
         console.error("Error loading cart:", error);
       } finally {
@@ -61,7 +59,7 @@ const CartPage = () => {
   useEffect(() => {
     const total = cartItems.reduce((acc, item) => {
       if (!item.product) return acc;
-      return acc + (item.product.price * item.quantity);
+      return acc + item.product.price * item.quantity;
     }, 0);
 
     setSubtotal(total);
@@ -103,87 +101,29 @@ const CartPage = () => {
     return product.images.find(i => i.isMain)?.url || product.images[0].url;
   };
 
-  // 🔥 CHECKOUT (FULLY FIXED)
-  const handleCheckout = async () => {
-    try {
-      setCheckoutLoading(true);
+  // 🔹 WhatsApp Checkout
+  const handleWhatsAppCheckout = () => {
+    const phone = "9885033462"; // Replace with your WhatsApp number
 
-      const { data: { session } } = await supabase.auth.getSession();
+    const message = `
+Hi, I would like to place an order:
 
-      if (!session) {
-        alert("Please login first");
-        return;
-      }
+${cartItems.map((item, index) => `
+Item ${index + 1}
+Name: ${item.product.name}
+Price: ₹${item.product.price}
+Size: ${item.size}
+Quantity: ${item.quantity}
+Subtotal: ₹${item.product.price * item.quantity}
+`).join('\n')}
 
-      // 1️⃣ Create order from backend
-      const res = await fetch("http://localhost:5000/create-order", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
+Total: ₹${subtotal}
+`;
 
-      const data = await res.json();
-
-      if (!data.id) {
-        throw new Error("Failed to create order");
-      }
-
-      // 2️⃣ Razorpay options
-      const options = {
-        key: import.meta.env.VITE_RAZORPAY_KEY,
-        amount: data.amount,
-        currency: "INR",
-        name: "Your Store",
-        description: "Order Payment",
-        order_id: data.id,
-
-        handler: async function (response) {
-          // 3️⃣ Verify payment
-          const verifyRes = await fetch("http://localhost:5000/verify-payment", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify(response),
-          });
-
-          const verifyData = await verifyRes.json();
-
-          if (verifyData.success) {
-            alert("✅ Payment successful!");
-
-            // optional: redirect
-            window.location.href = "/orders";
-          } else {
-            alert("❌ Payment verification failed");
-          }
-        },
-
-        prefill: {
-          email: session.user.email,
-        },
-
-        theme: {
-          color: "#000000",
-        },
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.open();
-
-      rzp.on("payment.failed", function () {
-        alert("Payment failed. Try again.");
-      });
-
-    } catch (err) {
-      console.error("Checkout error:", err);
-      alert("Something went wrong");
-    } finally {
-      setCheckoutLoading(false);
-    }
+    window.open(
+      `https://wa.me/${phone}?text=${encodeURIComponent(message)}`,
+      "_blank"
+    );
   };
 
   // 🔹 Loading
@@ -200,8 +140,10 @@ const CartPage = () => {
   if (!user) {
     return (
       <div className="pt-40 text-center">
-        <h2>Please Login</h2>
-        <Link to="/login">Go to Login</Link>
+        <h2 className="text-2xl font-semibold mb-4">Please Login</h2>
+        <Link to="/login" className="underline">
+          Go to Login
+        </Link>
       </div>
     );
   }
@@ -210,8 +152,10 @@ const CartPage = () => {
   if (!cartItems.length) {
     return (
       <div className="pt-40 text-center">
-        <h2>Your Bag is Empty</h2>
-        <Link to="/">Start Shopping</Link>
+        <h2 className="text-2xl font-semibold mb-4">Your Bag is Empty</h2>
+        <Link to="/" className="underline">
+          Start Shopping
+        </Link>
       </div>
     );
   }
@@ -222,23 +166,44 @@ const CartPage = () => {
 
         {/* LEFT */}
         <div className="lg:col-span-8">
+          <h1 className="text-3xl font-semibold mb-8">Shopping Bag</h1>
+
           {cartItems.map(item => (
             item.product && (
               <div key={item.id} className="flex py-6 border-b">
-                <img src={getImage(item.product)} className="h-32 w-24 object-cover" />
+                <img
+                  src={getImage(item.product)}
+                  alt={item.product.name}
+                  className="h-32 w-24 object-cover rounded"
+                />
 
                 <div className="ml-6 flex-1">
-                  <h3>{item.product.name}</h3>
-                  <p>₹ {item.product.price}</p>
-                  <p>Size: {item.size}</p>
+                  <h3 className="text-lg font-medium">{item.product.name}</h3>
+                  <p className="text-gray-600">₹ {item.product.price}</p>
+                  <p className="text-gray-500 text-sm">Size: {item.size}</p>
 
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => updateQuantity(item.id, item.quantity, -1)}><Minus size={14} /></button>
-                    {item.quantity}
-                    <button onClick={() => updateQuantity(item.id, item.quantity, 1)}><Plus size={14} /></button>
+                  <div className="flex items-center gap-3 mt-3">
+                    <button
+                      onClick={() => updateQuantity(item.id, item.quantity, -1)}
+                      className="border p-1 rounded"
+                    >
+                      <Minus size={14} />
+                    </button>
+
+                    <span>{item.quantity}</span>
+
+                    <button
+                      onClick={() => updateQuantity(item.id, item.quantity, 1)}
+                      className="border p-1 rounded"
+                    >
+                      <Plus size={14} />
+                    </button>
                   </div>
 
-                  <button onClick={() => removeItem(item.id)} className="text-red-500 mt-2">
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    className="text-red-500 text-sm mt-3"
+                  >
                     Remove
                   </button>
                 </div>
@@ -248,22 +213,20 @@ const CartPage = () => {
         </div>
 
         {/* RIGHT */}
-        <div className="lg:col-span-4 mt-10">
-          <div className="bg-gray-50 p-6">
-            <h2>Order Summary</h2>
+        <div className="lg:col-span-4 mt-10 lg:mt-0">
+          <div className="bg-gray-50 p-6 rounded-lg sticky top-32">
+            <h2 className="text-xl font-semibold">Order Summary</h2>
 
-            <div className="flex justify-between mt-4">
+            <div className="flex justify-between mt-4 text-lg">
               <span>Total</span>
               <span>₹ {subtotal}</span>
             </div>
 
             <button
-              onClick={handleCheckout}
-              disabled={checkoutLoading}
-              className="w-full mt-6 bg-black text-white py-3 flex justify-center items-center gap-2"
+              onClick={handleWhatsAppCheckout}
+              className="w-full mt-6 bg-green-500 hover:bg-green-600 text-white py-3 rounded transition"
             >
-              {checkoutLoading ? <Loader2 className="animate-spin" /> : "Checkout"}
-              <Lock size={14} />
+              Order on WhatsApp
             </button>
           </div>
         </div>

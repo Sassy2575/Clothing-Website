@@ -11,10 +11,10 @@ const ProductPage = () => {
   // Product State
   const [product, setProduct] = useState(null);
   const [selectedSize, setSelectedSize] = useState(null);
-  //const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState(1);
   const [mainImage, setMainImage] = useState("");
   const [loading, setLoading] = useState(true);
-  //const [actionLoading, setActionLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   
   // User & Interaction State
   //const [isWishlisted, setIsWishlisted] = useState(false);
@@ -126,7 +126,7 @@ const ProductPage = () => {
           window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
     };
 
-    /*const handleAddToCart = async () => {
+    const handleAddToCart = async () => {
     if (!product) return;
     if (!user) {
       alert("Please login to add items to your cart.");
@@ -139,8 +139,7 @@ const ProductPage = () => {
 
     try {
       setActionLoading(true);
-      const finalSize = selectedSize || "One Size";
-
+      const finalSize = product.sizes.find(s => s.id === selectedSize)?.size || "One Size";
       console.log("USER:", user); // 🔥 ADDED
 
       const { data: existingItem } = await supabase
@@ -175,6 +174,7 @@ const ProductPage = () => {
     }
   }; 
 
+    /*
   const toggleWishlist = async () => {
     if (!user) return navigate('/login');
     const previousState = isWishlisted;
@@ -376,31 +376,9 @@ const ProductPage = () => {
               </div>
             </div>
           )}
-
-          {/* Add CART CODE HERE
           
-          <div className="flex gap-4 mb-8">
-            <div className="flex items-center border border-gray-200 w-32 justify-between px-4">
-              <button onClick={() => setQuantity(q => Math.max(1, q - 1))}><Minus size={14} /></button>
-              <span className="text-sm font-medium">{quantity}</span>
-              <button onClick={() => setQuantity(q => q + 1)}><Plus size={14} /></button>
-            </div>
-            <button 
-              onClick ={handleAddToCart} 
-              disabled={(product.sizes.length > 0 && !selectedSize) || actionLoading}
-              className={`flex-1 bg-black text-white uppercase tracking-[0.2em] text-xs font-bold transition-colors py-4 flex items-center justify-center gap-2
-                ${(product.sizes.length > 0 && !selectedSize) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-800'}`}
-            >
-              {actionLoading ? <Loader2 className="animate-spin" size={16} /> : (product.sizes.length > 0 && !selectedSize ? 'Select Size' : 'Add to Cart')}
-            </button>
-    
-            <button onClick={toggleWishlist} className={`w-14 flex items-center justify-center border transition-colors ${isWishlisted ? 'border-red-500 text-red-500 bg-red-50' : 'border-gray-200 hover:border-black'}`}>
-              <Heart size={20} fill={isWishlisted ? "currentColor" : "none"} />
-            </button>
-          </div>
-            */}
-
-          <div className="mb-8">
+          {/* WhatsApp Button */}
+          <div className="mb-4">
             <button
               onClick={handleWhatsApp}
               disabled={product.sizes.length > 0 && !selectedSize}
@@ -409,8 +387,44 @@ const ProductPage = () => {
                   ? 'opacity-50 cursor-not-allowed text-black border-gray-300'
                   : 'text-white bg-green-400 hover:bg-white hover:text-green-700 hover:border-green-700'}`}
             >
-              {'Customize on WhatsApp'}
+              Customize on WhatsApp
             </button>
+          </div>
+
+          {/* Add to Cart Section */}
+          <div className="mb-8 space-y-4">
+            
+            {/* Quantity Selector */}
+            <div className="flex items-center border border-gray-200 w-full justify-between px-4 py-4">
+              <button onClick={() => setQuantity(q => Math.max(1, q - 1))}>
+                <Minus size={14} />
+              </button>
+
+              <span className="text-sm font-medium">{quantity}</span>
+
+              <button onClick={() => setQuantity(q => q + 1)}>
+                <Plus size={14} />
+              </button>
+            </div>
+
+            {/* Add to Cart Button */}
+            <button 
+              onClick={handleAddToCart} 
+              disabled={(product.sizes.length > 0 && !selectedSize) || actionLoading}
+              className={`w-full bg-black text-white uppercase tracking-[0.2em] text-xs font-bold transition-colors py-4 flex items-center justify-center gap-2
+                ${(product.sizes.length > 0 && !selectedSize) 
+                  ? 'opacity-50 cursor-not-allowed' 
+                  : 'hover:bg-gray-800'}`}
+            >
+              {actionLoading ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                product.sizes.length > 0 && !selectedSize 
+                  ? 'Select Size' 
+                  : 'Add to Cart'
+              )}
+            </button>
+
           </div>
         </div>
       </div>
@@ -543,7 +557,8 @@ const ProductPage = () => {
           </div>
         </div>
       </div>
-    </div>
+     </div>
+  
   );
 };
 

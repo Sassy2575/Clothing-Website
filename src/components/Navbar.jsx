@@ -8,7 +8,7 @@ const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  //const [cartCount, setCartCount] = useState(0);
+  const [cartCount, setCartCount] = useState(0);
   const [categories, setCategories] = useState([]);
   
   const navigate = useNavigate(); 
@@ -24,7 +24,7 @@ const Navbar = () => {
   }, []);
 
   // 2. Fetch Cart Count from Database
-  /*
+  
   const fetchCartCount = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -65,7 +65,7 @@ const Navbar = () => {
       // FIXED: Added ?. check to prevent crashes on cleanup
       authListener?.subscription?.unsubscribe();
     };
-  }, []); */
+  }, []); 
 
   const getCategoryUrl = (cat) => {
     return `/shop/${cat.slug || cat.name.toLowerCase().replace(/\s+/g, '-')}`;
@@ -121,7 +121,7 @@ const Navbar = () => {
               <User className="w-5 h-5 hover:text-black" />
             </Link>
   
-           {/*
+           
             <div className="relative">
               <Link to="/cart">
                 <ShoppingBag className="w-5 h-5 hover:text-black" />
@@ -132,7 +132,7 @@ const Navbar = () => {
                 )}
               </Link>
             </div>
-            */}
+            
 
           </div>
         </div>

@@ -8,7 +8,7 @@ import CategoryPage from './pages/CategoryPage';
 import ProductPage from './pages/ProductPage';
 import AnnouncementBar from './components/Announcement';  
 import AuthPage from './pages/AuthPage';
-//import CartPage from './pages/CartPage';
+import CartPage from './pages/CartPage';
 import WishlistPage from './pages/WishList';
 import SearchPage from './pages/SearchPage';
 
@@ -45,7 +45,7 @@ function App() {
             <Route path="/shop/:categoryId" element={<CategoryPage />} />
             <Route path="/product/:productId" element={<ProductPage />} />
             <Route path="/login" element={<AuthPage />} />
-            {/* <Route path="/cart" element={<CartPage />} /> */}
+            <Route path="/cart" element={<CartPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/wishlist" element={<WishlistPage />} />
           </Routes>
