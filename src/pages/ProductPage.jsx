@@ -49,10 +49,13 @@ const ProductPage = () => {
         const { data: productData, error: productError } = await supabase
           .from('Product') 
           .select(`
-            *,
+            id,
+            name,
+            description,
+            price,
             category:Category(name, slug),
             sizes:ProductSize(*),
-            images:ProductImage(*)
+            images:ProductImage(id, url, isMain)
           `)
           .eq('id', productId)
           .single();
@@ -285,12 +288,12 @@ const ProductPage = () => {
         {/* LEFT: Image Gallery */}
         <div className="space-y-4">
           <div className="aspect-[3/4] bg-gray-100 overflow-hidden relative group">
-            <img src={mainImage} alt={product.name}  className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
+            <img src={mainImage} alt={product.name} decoding="async" className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
           </div>
           <div className="grid grid-cols-4 gap-4">
             {product.images && product.images.map((img) => (
               <button key={img.id} onClick={() => setMainImage(img.url)} className={`aspect-[3/4] overflow-hidden border ${mainImage === img.url ? 'border-black' : 'border-transparent'}`}>
-                <img src={img.url} loading="lazy" className="w-full h-full object-cover" alt="thumbnail" />
+                <img src={img.url} loading="lazy" decoding="async" className="w-full h-full object-cover" alt="thumbnail" />
               </button>
             ))}
           </div>

@@ -18,7 +18,7 @@ const Home = () => {
     const fetchBanners = async () => {
       const { data, error } = await supabase
         .from("HeroBanner")
-        .select("*")
+        .select("id, image, title, subtitle, buttonText")
         .eq("isActive", true)
         .order("order", { ascending: true });
 

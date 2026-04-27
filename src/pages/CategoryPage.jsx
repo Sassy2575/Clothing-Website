@@ -11,7 +11,7 @@ const CategoryPage = () => {
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  const limit = 20;
+  const limit = 12; // Products per page
 
   // Reset page on category change
   useEffect(() => {
