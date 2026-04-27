@@ -175,6 +175,7 @@ Total: ₹${subtotal}
                   src={getImage(item.product)}
                   alt={item.product.name}
                   className="h-32 w-24 object-cover rounded"
+                  loading="lazy"
                 />
 
                 <div className="ml-6 flex-1">

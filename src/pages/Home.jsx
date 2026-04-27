@@ -156,8 +156,8 @@ useEffect(() => {
           >
             <div className={`w-full h-full overflow-hidden`}>
               <img 
-                src={slide.image} 
-                alt={slide.title} 
+                src={slides[current]?.image}
+                alt={slides[current]?.title} 
                 className={`w-full h-full object-cover object-top lg:object-center transition-transform duration-[6000ms] ease-out ${                  index === current ? 'scale-110' : 'scale-100'
                 }`}
               />
@@ -197,6 +197,7 @@ useEffect(() => {
                 <img 
                   src={cat.image} 
                   alt={cat.name} 
+                  loading="lazy"
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-80 transition-opacity duration-300 group-hover:opacity-90"></div>
@@ -232,6 +233,7 @@ useEffect(() => {
                     src={getMainImage(product) || null} 
                     alt={product.name} 
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    loading="lazy"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors duration-300"></div>
                   <button className="absolute bottom-0 left-0 right-0 bg-white text-black py-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 text-xs uppercase tracking-widest font-bold">
