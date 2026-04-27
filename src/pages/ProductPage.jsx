@@ -49,13 +49,10 @@ const ProductPage = () => {
         const { data: productData, error: productError } = await supabase
           .from('Product') 
           .select(`
-            id,
-            name,
-            description,
-            price,
+            *,
             category:Category(name, slug),
             sizes:ProductSize(*),
-            images:ProductImage(id, url, isMain)
+            images:ProductImage(*)
           `)
           .eq('id', productId)
           .single();
@@ -288,7 +285,7 @@ const ProductPage = () => {
         {/* LEFT: Image Gallery */}
         <div className="space-y-4">
           <div className="aspect-[3/4] bg-gray-100 overflow-hidden relative group">
-            <img src={mainImage} alt={product.name} decoding="async" className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
+            <img src={mainImage} alt={product.name} loading="lazy" decoding="async" className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
           </div>
           <div className="grid grid-cols-4 gap-4">
             {product.images && product.images.map((img) => (
