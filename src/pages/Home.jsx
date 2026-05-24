@@ -64,7 +64,11 @@ const Home = () => {
   // Fetch Categories
   useEffect(() => {
     const fetchCategories = async () => {
-      const { data, error } = await supabase.from('Category').select('*');
+      const { data, error } = await supabase
+      .from('Category')
+      .select('id, name, slug, image')
+      .order('id', { ascending: true });
+
       if (error) console.error('Error fetching categories:', error);
       else setCategories(data);
     };
@@ -147,29 +151,31 @@ useEffect(() => {
       
       {/* ================= HERO SLIDER ================= */}
       <div className="relative h-[60vh] w-full overflow-hidden bg-gray-900">
-        {slides.map((slide, index) => (
-          <div 
-            key={slide.id}
-            className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-              index === current ? 'opacity-100 z-10' : 'opacity-0 z-0'
-            }`}
-          >
-            <div className={`w-full h-full overflow-hidden`}>
-              <img 
+        {slides.length > 0 && (
+          <div className="absolute inset-0">
+            <div className="w-full h-full overflow-hidden">
+              <img
                 src={slides[current]?.image}
-                alt={slides[current]?.title} 
-                className={`w-full h-full object-cover object-top lg:object-center transition-transform duration-[6000ms] ease-out ${                  index === current ? 'scale-110' : 'scale-100'
-                }`}
+                alt={slides[current]?.title}
+                className="w-full h-full object-cover object-top lg:object-center transition-transform duration-[6000ms] ease-out scale-110"
               />
             </div>
+
             <div className="absolute inset-0 bg-black/30"></div>
+
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white px-4">
-              <p className="text-xs md:text-sm tracking-[0.3em] uppercase mb-4 animate-fade-in-up">{slide.subtitle}</p>
-              <h1 className="text-4xl md:text-6xl font-serif mb-8 tracking-widest drop-shadow-lg animate-fade-in-up delay-100">{slide.title}</h1>
-              <button className="bg-white text-black px-10 py-3 uppercase tracking-[0.2em] text-xs font-bold hover:bg-black hover:text-white transition-all duration-300 animate-fade-in-up delay-200">{slide.buttonText}</button>
+              <p className="text-xs md:text-sm tracking-[0.3em] uppercase mb-4 animate-fade-in-up">
+                {slides[current]?.subtitle}
+              </p>
+              <h1 className="text-4xl md:text-6xl font-serif mb-8 tracking-widest drop-shadow-lg animate-fade-in-up delay-100">
+                {slides[current]?.title}
+              </h1>
+              <button className="bg-white text-black px-10 py-3 uppercase tracking-[0.2em] text-xs font-bold hover:bg-black hover:text-white transition-all duration-300 animate-fade-in-up delay-200">
+                {slides[current]?.buttonText}
+              </button>
             </div>
           </div>
-        ))}
+        )}
         <div className="absolute bottom-10 right-10 z-20 flex space-x-3">
           {slides.map((_, index) => (
             <button

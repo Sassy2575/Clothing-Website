@@ -312,7 +312,7 @@ const ProductPage = () => {
             </button>
           </div>
 
-          <p className="text-gray-600 text-sm leading-relaxed mb-8">{product.description}</p>
+          <p className="text-gray-600 text-sm leading-relaxed mb-8 whitespace-pre-line">{product.description}</p>
 
           {/* Size Selector */}
           {product.sizes && product.sizes.length > 0 && (
