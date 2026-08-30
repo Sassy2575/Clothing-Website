@@ -1,165 +1,392 @@
-import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
+import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { Trash2, ShoppingBag, ArrowRight, Heart } from "lucide-react";
+
+const WISHLIST_STORAGE_KEY = "shopify_wishlist";
+
+/* -------------------------------------------------------------
+   Helpers
+------------------------------------------------------------- */
+
+function getWishlist() {
+  try {
+    const saved = localStorage.getItem(WISHLIST_STORAGE_KEY);
+
+    if (!saved) {
+      return [];
+    }
+
+    const parsed = JSON.parse(saved);
+
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.error("Unable to read wishlist:", error);
+
+    localStorage.removeItem(WISHLIST_STORAGE_KEY);
+
+    return [];
+  }
+}
+
+function saveWishlist(items) {
+  localStorage.setItem(
+    WISHLIST_STORAGE_KEY,
+    JSON.stringify(items)
+  );
+
+  window.dispatchEvent(
+    new Event("wishlistUpdated")
+  );
+}
+
+function formatPrice(price, currency = "INR") {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(Number(price || 0));
+}
+
+/* -------------------------------------------------------------
+   Wishlist Page
+------------------------------------------------------------- */
 
 const WishlistPage = () => {
-  const navigate = useNavigate();
   const [wishlistItems, setWishlistItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Fetch Wishlist & Product Details
+  /* -----------------------------------------------------------
+     Load wishlist
+  ----------------------------------------------------------- */
+
   useEffect(() => {
-    const fetchWishlist = async () => {
+    const loadWishlist = () => {
       try {
-        setLoading(true);
+        const items = getWishlist();
 
-        // A. Check User Session
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (!session) {
-          // If not logged in, we can't show DB wishlist
-          setLoading(false);
-          return; 
-        }
+        console.log(
+          "WISHLIST PAGE ITEMS:",
+          items
+        );
 
-        // B. Fetch Wishlist Items JOINED with Product & Images
-        const { data, error } = await supabase
-          .from('WishlistItem')
-          .select(`
-            id,
-            product:Product (
-              id,
-              name,
-              price,
-              description,
-              category:Category(slug),
-              images:ProductImage (
-                url,
-                isMain
-              )
-            )
-          `)
-          .eq('userId', session.user.id);
-
-        if (error) throw error;
-        setWishlistItems(data || []);
-
+        setWishlistItems(items);
       } catch (error) {
-        console.error("Error loading wishlist:", error);
+        console.error(
+          "Error loading wishlist:",
+          error
+        );
+
+        setWishlistItems([]);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchWishlist();
-    
+    loadWishlist();
+
+    /* ---------------------------------------------------------
+       Listen for wishlist changes from ProductPage
+    --------------------------------------------------------- */
+
+    const handleWishlistUpdate = () => {
+      loadWishlist();
+    };
+
+    window.addEventListener(
+      "wishlistUpdated",
+      handleWishlistUpdate
+    );
+
+    /* Also update if another tab changes localStorage */
+
+    const handleStorageChange = (event) => {
+      if (
+        event.key === WISHLIST_STORAGE_KEY
+      ) {
+        loadWishlist();
+      }
+    };
+
+    window.addEventListener(
+      "storage",
+      handleStorageChange
+    );
+
+    return () => {
+      window.removeEventListener(
+        "wishlistUpdated",
+        handleWishlistUpdate
+      );
+
+      window.removeEventListener(
+        "storage",
+        handleStorageChange
+      );
+    };
   }, []);
 
-  // 2. Remove Handler
-  const removeFromWishlist = async (id) => {
-    // Optimistic UI update (remove from screen immediately)
-    setWishlistItems(items => items.filter(item => item.id !== id));
+  /* -----------------------------------------------------------
+     Remove item
+  ----------------------------------------------------------- */
 
-    const { error } = await supabase
-      .from('WishlistItem')
-      .delete()
-      .eq('id', id);
+  const removeFromWishlist = (productId) => {
+    const updatedWishlist =
+      wishlistItems.filter(
+        (item) =>
+          item.id !== productId
+      );
 
-    if (error) {
-      console.error("Error removing item:", error);
-      // Ideally revert UI here if needed
-    }
+    setWishlistItems(updatedWishlist);
+
+    saveWishlist(updatedWishlist);
   };
 
-  // Helper to format price
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0
-    }).format(price);
+  /* -----------------------------------------------------------
+     Clear wishlist
+  ----------------------------------------------------------- */
+
+  const clearWishlist = () => {
+    setWishlistItems([]);
+
+    saveWishlist([]);
   };
 
-  // Helper to get Main Image
-  const getImage = (product) => {
-    if (!product.images || product.images.length === 0) return "";
-    const main = product.images.find(img => img.isMain);
-    return main ? main.url : product.images[0].url;
-  };
+  /* -----------------------------------------------------------
+     Loading
+  ----------------------------------------------------------- */
 
   if (loading) {
     return (
-      <div className="min-h-screen pt-32 text-center">
-        <p className="text-gray-500">Loading your wishlist...</p>
+      <div className="min-h-screen pt-40 text-center">
+        <Heart
+          size={28}
+          className="mx-auto mb-4 animate-pulse"
+        />
+
+        <p className="text-gray-500">
+          Loading your wishlist...
+        </p>
       </div>
     );
   }
 
+  /* -----------------------------------------------------------
+     Empty Wishlist
+  ----------------------------------------------------------- */
+
+  if (wishlistItems.length === 0) {
+    return (
+      <div className="bg-white min-h-screen pt-40 pb-20 px-4">
+        <div className="max-w-3xl mx-auto text-center">
+
+          <Heart
+            size={46}
+            strokeWidth={1}
+            className="mx-auto mb-6 text-gray-300"
+          />
+
+          <h1 className="text-3xl font-serif text-gray-900 mb-3">
+            My Wishlist
+          </h1>
+
+          <p className="text-gray-500 mb-8">
+            Your wishlist is currently empty.
+          </p>
+
+          <Link
+            to="/shop/all"
+            className="inline-flex items-center gap-2 border border-black px-8 py-4 text-xs font-bold uppercase tracking-widest hover:bg-black hover:text-white transition"
+          >
+            Continue Shopping
+            <ArrowRight size={15} />
+          </Link>
+
+        </div>
+      </div>
+    );
+  }
+
+  /* -----------------------------------------------------------
+     Wishlist
+  ----------------------------------------------------------- */
+
   return (
     <div className="bg-white pt-32 pb-20 min-h-screen">
+
       <div className="max-w-7xl mx-auto px-4">
-        
-        <h1 className="text-3xl font-serif text-center mb-12 tracking-wide text-gray-900">
-          My Wishlist
-        </h1>
 
-        {wishlistItems.length === 0 ? (
-          <div className="text-center py-20 bg-gray-50 border border-gray-100">
-            <h3 className="text-lg font-serif mb-2">Your wishlist is empty</h3>
-            <p className="text-sm text-gray-500 mb-6">Save items you love to view them here later.</p>
-            <Link to="/" className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest border-b border-black pb-1 hover:text-gray-600">
-              Continue Shopping <ArrowRight size={14} />
-            </Link>
+        {/* -----------------------------------------------------
+            HEADER
+        ----------------------------------------------------- */}
+
+        <div className="flex items-center justify-between mb-12">
+
+          <div>
+            <h1 className="text-3xl md:text-4xl font-serif text-gray-900 tracking-wide">
+              My Wishlist
+            </h1>
+
+            <p className="text-sm text-gray-500 mt-2">
+              {wishlistItems.length}{" "}
+              {wishlistItems.length === 1
+                ? "item"
+                : "items"}{" "}
+              saved
+            </p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {wishlistItems.map((item) => {
-              // Guard clause: If product was deleted but wishlist item remains
-              if (!item.product) return null; 
 
-              return (
-                <div key={item.id} className="group relative border border-gray-100 p-4 hover:shadow-lg transition-shadow">
-                  {/* Remove Button */}
-                  <button 
-                    onClick={(e) => {
-                      e.preventDefault();
-                      removeFromWishlist(item.id);
-                    }}
-                    className="absolute top-4 right-4 z-10 p-2 bg-white rounded-full shadow-sm text-gray-400 hover:text-red-500 transition-colors"
+          {wishlistItems.length > 0 && (
+            <button
+              type="button"
+              onClick={clearWishlist}
+              className="text-xs uppercase tracking-widest text-gray-500 hover:text-red-600 transition"
+            >
+              Clear Wishlist
+            </button>
+          )}
+
+        </div>
+
+        {/* -----------------------------------------------------
+            PRODUCTS
+        ----------------------------------------------------- */}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-10">
+
+          {wishlistItems.map((item) => {
+
+            /*
+             * The ProductPage stores products using:
+             *
+             * id
+             * handle
+             * title
+             * price
+             * image
+             *
+             * We support a few possible property names here
+             * so older wishlist entries don't break.
+             */
+
+            const productId =
+              item.id ||
+              item.productId;
+
+            const productHandle =
+              item.handle ||
+              item.productHandle ||
+              productId;
+
+            const productTitle =
+              item.title ||
+              item.name ||
+              "Product";
+
+            const productImage =
+              item.image ||
+              item.imageUrl ||
+              item.featuredImage ||
+              "";
+
+            const productPrice =
+              item.price || 0;
+
+            const currency =
+              item.currencyCode ||
+              item.currency ||
+              "INR";
+
+            return (
+              <div
+                key={productId}
+                className="group relative"
+              >
+
+                {/* -------------------------------------------------
+                    IMAGE
+                ------------------------------------------------- */}
+
+                <div className="relative aspect-[3/4] overflow-hidden bg-gray-100">
+
+                  <Link
+                    to={`/product/${productHandle}`}
+                    className="block w-full h-full"
+                  >
+
+                    {productImage ? (
+                      <img
+                        src={productImage}
+                        alt={productTitle}
+                        loading="lazy"
+                        decoding="async"
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">
+                        No image
+                      </div>
+                    )}
+
+                  </Link>
+
+                  {/* -------------------------------------------------
+                      REMOVE BUTTON
+                  ------------------------------------------------- */}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      removeFromWishlist(
+                        productId
+                      )
+                    }
+                    aria-label={`Remove ${productTitle} from wishlist`}
+                    className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-white/95 flex items-center justify-center shadow-sm text-gray-700 hover:text-red-600 transition"
                   >
                     <Trash2 size={16} />
                   </button>
 
-                  {/* Image Link */}
-                  <Link to={`/product/${item.product.id}`} className="block relative aspect-[3/4] overflow-hidden bg-gray-100 mb-4">
-                    <img 
-                      src={getImage(item.product)} 
-                      alt={item.product.name} 
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                    />
+                </div>
+
+                {/* -------------------------------------------------
+                    DETAILS
+                ------------------------------------------------- */}
+
+                <div className="pt-4 text-center">
+
+                  <Link
+                    to={`/product/${productHandle}`}
+                  >
+                    <h3 className="text-sm font-serif font-medium text-gray-900 hover:underline">
+                      {productTitle}
+                    </h3>
                   </Link>
 
-                  {/* Details */}
-                  <div className="text-center">
-                    <h3 className="text-sm font-serif font-medium text-gray-900 mb-1">
-                      <Link to={`/product/${item.product.id}`}>{item.product.name}</Link>
-                    </h3>
-                    <p className="text-sm text-gray-500 mb-4">{formatPrice(item.product.price)}</p>
-                    
-                    <button 
-                      onClick={() => navigate(`/product/${item.product.id}`)}
-                      className="w-full text-black py-3 text-xs font-bold uppercase tracking-widest hover:bg-gray-800 transition-colors flex items-center justify-center gap-2"
-                    >
-                      View Product <ShoppingBag size={14} />
-                    </button>
-                  </div>
+                  <p className="text-sm text-gray-500 mt-2">
+                    {formatPrice(
+                      productPrice,
+                      currency
+                    )}
+                  </p>
+
+                  <Link
+                    to={`/product/${productHandle}`}
+                    className="mt-4 inline-flex items-center justify-center gap-2 w-full border border-black py-3 text-xs font-bold uppercase tracking-widest hover:bg-black hover:text-white transition"
+                  >
+                    View Product
+                    <ShoppingBag size={14} />
+                  </Link>
+
                 </div>
-              );
-            })}
-          </div>
-        )}
+
+              </div>
+            );
+          })}
+
+        </div>
+
       </div>
+
     </div>
   );
 };

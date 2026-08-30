@@ -1,19 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
+
 
 const AnnouncementBar = () => {
   const [imageUrl, setImageUrl] = useState("");
 
   useEffect(() => {
-    const getImage = async () => {
-      const { data } = supabase.storage
-        .from('products') // 🔁 change bucket name
-        .getPublicUrl('banner.jpg'); // 🔁 change file name
-
-      setImageUrl(data.publicUrl);
-    };
-
-    getImage();
   }, []);
 
   return (

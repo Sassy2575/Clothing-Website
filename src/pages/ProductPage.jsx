@@ -1,564 +1,1845 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Heart, Star, ChevronRight, Minus, Plus, Loader2, User, MessageSquare } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  ChevronRight,
+  Loader2,
+  Minus,
+  Plus,
+  Star,
+  MessageSquare,
+  Heart,
+} from "lucide-react";
+
+import {
+  useNavigate,
+  useParams,
+  Link,
+} from "react-router-dom";
+
+import {
+  getShopifyProductByHandle,
+} from "../lib/shopifyClient";
+
+/* ============================================================
+   CONSTANTS
+============================================================ */
+
+const CART_STORAGE_KEY = "shopify_cart";
+const WISHLIST_STORAGE_KEY = "shopify_wishlist";
+
+const SIZES = [
+  "XS",
+  "S",
+  "M",
+  "L",
+  "XL",
+  "XXL",
+  "XXXL",
+];
+
+/*
+ * Size chart used when the customer opens Size Guide.
+ *
+ * You can change these measurements later if your brand
+ * uses different measurements.
+ */
+const SIZE_CHART = [
+  {
+    label: "Chest / Bust",
+    XS: 32,
+    S: 34,
+    M: 36,
+    L: 38,
+    XL: 40,
+    XXL: 42,
+    XXXL: 44,
+  },
+  {
+    label: "Shoulder",
+    XS: 14,
+    S: 14.5,
+    M: 15,
+    L: 15.5,
+    XL: 16,
+    XXL: 16.5,
+    XXXL: 17,
+  },
+  {
+    label: "Waist",
+    XS: 26,
+    S: 28,
+    M: 30,
+    L: 32,
+    XL: 34,
+    XXL: 36,
+    XXXL: 38,
+  },
+  {
+    label: "Hips",
+    XS: 34,
+    S: 36,
+    M: 38,
+    L: 40,
+    XL: 42,
+    XXL: 44,
+    XXXL: 46,
+  },
+];
+
+/* ============================================================
+   SHOPIFY API
+============================================================ */
+
+async function shopifyRequest(query, variables = {}) {
+  const domain =
+    import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
+
+  const apiVersion =
+    import.meta.env.VITE_SHOPIFY_API_VERSION || "2026-07";
+
+  const storefrontToken =
+    import.meta.env.VITE_SHOPIFY_STOREFRONT_TOKEN;
+
+  if (!domain) {
+    throw new Error(
+      "Missing VITE_SHOPIFY_STORE_DOMAIN in .env"
+    );
+  }
+
+  if (!storefrontToken) {
+    throw new Error(
+      "Missing VITE_SHOPIFY_STOREFRONT_TOKEN in .env"
+    );
+  }
+
+  const response = await fetch(
+    `https://${domain}/api/${apiVersion}/graphql.json`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Storefront-Access-Token":
+          storefrontToken,
+      },
+
+      body: JSON.stringify({
+        query,
+        variables,
+      }),
+    }
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result?.errors
+        ?.map((error) => error.message)
+        .join(", ") ||
+        `Shopify request failed (${response.status})`
+    );
+  }
+
+  if (result?.errors?.length) {
+    throw new Error(
+      result.errors
+        .map((error) => error.message)
+        .join(", ")
+    );
+  }
+
+  return result.data;
+}
+
+/* ============================================================
+   SHOPIFY CART - CREATE
+============================================================ */
+
+async function createShopifyCart(
+  variantId,
+  quantity
+) {
+  const mutation = `
+    mutation CreateCart($lines: [CartLineInput!]) {
+      cartCreate(input: { lines: $lines }) {
+        cart {
+          id
+          checkoutUrl
+          totalQuantity
+
+          cost {
+            subtotalAmount {
+              amount
+              currencyCode
+            }
+          }
+
+          lines(first: 100) {
+            edges {
+              node {
+                id
+                quantity
+
+                merchandise {
+                  ... on ProductVariant {
+                    id
+                    title
+
+                    product {
+                      id
+                      title
+                      handle
+                    }
+
+                    image {
+                      url
+                      altText
+                    }
+
+                    price {
+                      amount
+                      currencyCode
+                    }
+
+                    selectedOptions {
+                      name
+                      value
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const data = await shopifyRequest(
+    mutation,
+    {
+      lines: [
+        {
+          merchandiseId: variantId,
+          quantity,
+        },
+      ],
+    }
+  );
+
+  const errors =
+    data?.cartCreate?.userErrors || [];
+
+  if (errors.length) {
+    throw new Error(
+      errors
+        .map((error) => error.message)
+        .join(", ")
+    );
+  }
+
+  return data?.cartCreate?.cart;
+}
+
+/* ============================================================
+   SHOPIFY CART - ADD TO EXISTING
+============================================================ */
+
+async function addToExistingShopifyCart(
+  cartId,
+  variantId,
+  quantity
+) {
+  const mutation = `
+    mutation AddCartLines(
+      $cartId: ID!
+      $lines: [CartLineInput!]!
+    ) {
+      cartLinesAdd(
+        cartId: $cartId
+        lines: $lines
+      ) {
+        cart {
+          id
+          checkoutUrl
+          totalQuantity
+
+          cost {
+            subtotalAmount {
+              amount
+              currencyCode
+            }
+          }
+
+          lines(first: 100) {
+            edges {
+              node {
+                id
+                quantity
+
+                merchandise {
+                  ... on ProductVariant {
+                    id
+                    title
+
+                    product {
+                      id
+                      title
+                      handle
+                    }
+
+                    image {
+                      url
+                      altText
+                    }
+
+                    price {
+                      amount
+                      currencyCode
+                    }
+
+                    selectedOptions {
+                      name
+                      value
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const data = await shopifyRequest(
+    mutation,
+    {
+      cartId,
+
+      lines: [
+        {
+          merchandiseId: variantId,
+          quantity,
+        },
+      ],
+    }
+  );
+
+  const errors =
+    data?.cartLinesAdd?.userErrors || [];
+
+  if (errors.length) {
+    throw new Error(
+      errors
+        .map((error) => error.message)
+        .join(", ")
+    );
+  }
+
+  return data?.cartLinesAdd?.cart;
+}
+
+/* ============================================================
+   WISHLIST HELPERS
+============================================================ */
+
+function getWishlist() {
+  try {
+    const saved =
+      localStorage.getItem(
+        WISHLIST_STORAGE_KEY
+      );
+
+    if (!saved) return [];
+
+    const parsed = JSON.parse(saved);
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveWishlist(wishlist) {
+  localStorage.setItem(
+    WISHLIST_STORAGE_KEY,
+    JSON.stringify(wishlist)
+  );
+
+  window.dispatchEvent(
+    new Event("wishlistUpdated")
+  );
+}
+
+/* ============================================================
+   PRICE FORMATTER
+============================================================ */
+
+function formatPrice(
+  price,
+  currency = "INR"
+) {
+  return new Intl.NumberFormat(
+    "en-IN",
+    {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 0,
+    }
+  ).format(Number(price || 0));
+}
+
+/* ============================================================
+   PRODUCT PAGE
+============================================================ */
 
 const ProductPage = () => {
   const { productId } = useParams();
+
   const navigate = useNavigate();
+
   const reviewsRef = useRef(null);
-  
-  // Product State
-  const [product, setProduct] = useState(null);
-  const [selectedSize, setSelectedSize] = useState(null);
-  const [quantity, setQuantity] = useState(1);
-  const [mainImage, setMainImage] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  
-  // User & Interaction State
-  //const [isWishlisted, setIsWishlisted] = useState(false);
-  const [user, setUser] = useState(null);
 
-  // Review State
-  const [reviews, setReviews] = useState([]);
-  const [newRating, setNewRating] = useState(0); // Default to 0 so user has to click
-  const [newComment, setNewComment] = useState("");
-  const [submittingReview, setSubmittingReview] = useState(false);
-  const [hoverRating, setHoverRating] = useState(0); // For star hover effect
-  const [open, setOpen] = useState(false);
+  /* ----------------------------------------------------------
+     PRODUCT STATE
+  ---------------------------------------------------------- */
 
-  const sizeChart = [
-    { label: "Chest / Bust", XS: 32, S: 34, M: 36, L: 38, XL: 40, XXL: 42, XXXL: 44 },
-    { label: "Shoulder", XS: 14, S: 14.5, M: 15, L: 15.5, XL: 16, XXL: 16.5, XXXL: 17 },
-    { label: "Waist", XS: 26, S: 28, M: 30, L: 32, XL: 34, XXL: 36, XXXL: 38 },
-    { label: "Hips", XS: 34, S: 36, M: 38, L: 40, XL: 42, XXL: 44, XXXL: 46 }
-  ];
+  const [product, setProduct] =
+    useState(null);
 
-  const sizes = ["XS", "S", "M", "L", "XL", "XXL", "XXXL"];
+  const [
+    selectedVariantId,
+    setSelectedVariantId,
+  ] = useState(null);
 
-  // --- 1. FETCH DATA ---
+  const [quantity, setQuantity] =
+    useState(1);
+
+  const [mainImage, setMainImage] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [
+    actionLoading,
+    setActionLoading,
+  ] = useState(false);
+
+  /* ----------------------------------------------------------
+     SIZE GUIDE
+  ---------------------------------------------------------- */
+
+  const [
+    sizeGuideOpen,
+    setSizeGuideOpen,
+  ] = useState(false);
+
+  /* ----------------------------------------------------------
+     WISHLIST
+  ---------------------------------------------------------- */
+
+  const [
+    isWishlisted,
+    setIsWishlisted,
+  ] = useState(false);
+
+  /* ==========================================================
+     LOAD PRODUCT
+  ========================================================== */
+
   useEffect(() => {
-    const fetchData = async () => {
+    let cancelled = false;
+
+    const fetchProduct = async () => {
+      if (!productId) {
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
 
-        const { data: { session } } = await supabase.auth.getSession();
-        setUser(session?.user || null);
+        const handle =
+          decodeURIComponent(productId).trim();
 
-        const { data: productData, error: productError } = await supabase
-          .from('Product') 
-          .select(`
-            *,
-            category:Category(name, slug),
-            sizes:ProductSize(*),
-            images:ProductImage(*)
-          `)
-          .eq('id', productId)
-          .single();
+        const productData =
+          await getShopifyProductByHandle(
+            handle
+          );
 
-        if (productError) throw productError;
+        console.log(
+          "SHOPIFY PRODUCT PAGE:",
+          productData
+        );
 
-        if (productData) {
-          setProduct(productData);
-          const primaryImg = productData.images.find(img => img.isMain) || productData.images[0];
-          setMainImage(primaryImg ? primaryImg.url : '');
+        if (cancelled) return;
 
-          if (session?.user) {
-            const { data: wishlistData } = await supabase
-              .from('WishlistItem')
-              .select('*')
-              .eq('userId', session.user.id)
-              .eq('productId', productData.id)
-              .maybeSingle();
-            setIsWishlisted(!!wishlistData);
-          }
+        if (!productData) {
+          console.error(
+            `Shopify returned no product for handle: "${handle}"`
+          );
 
-          const { data: reviewsData } = await supabase
-            .from('Review')
-            .select(`
-              *,
-              user:User(fullName) 
-            `)
-            .eq('productId', productData.id)
-            .order('createdAt', { ascending: false });
-          
-          setReviews(reviewsData || []);
+          setProduct(null);
+
+          return;
         }
+
+        setProduct(productData);
+
+        const images =
+          productData.images?.nodes || [];
+
+        setMainImage(
+          productData.featuredImage?.url ||
+            images[0]?.url ||
+            ""
+        );
+
+        const variants =
+          productData.variants?.nodes || [];
+
+        const firstAvailableVariant =
+          variants.find(
+            (variant) =>
+              variant.availableForSale
+          ) ||
+          variants[0] ||
+          null;
+
+        setSelectedVariantId(
+          firstAvailableVariant?.id ||
+            null
+        );
       } catch (error) {
-        console.error("Error loading page:", error);
+        console.error(
+          "ERROR LOADING SHOPIFY PRODUCT:",
+          error
+        );
+
+        if (!cancelled) {
+          setProduct(null);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
-    fetchData();
+    fetchProduct();
+
     window.scrollTo(0, 0);
+
+    return () => {
+      cancelled = true;
+    };
   }, [productId]);
 
-  // --- 2. HANDLERS ---
+  /* ==========================================================
+     CHECK WISHLIST
+  ========================================================== */
 
-  const scrollToReviews = () => {
-    reviewsRef.current?.scrollIntoView({ behavior: 'smooth' });
+  useEffect(() => {
+    if (!product) return;
+
+    const wishlist =
+      getWishlist();
+
+    const exists =
+      wishlist.some(
+        (item) =>
+          item.id === product.id ||
+          item.handle === product.handle
+      );
+
+    setIsWishlisted(exists);
+  }, [product]);
+
+  /* ==========================================================
+     DERIVED DATA
+  ========================================================== */
+
+  const variants =
+    product?.variants?.nodes || [];
+
+  const images =
+    product?.images?.nodes || [];
+
+  const selectedVariant =
+    variants.find(
+      (variant) =>
+        variant.id === selectedVariantId
+    ) ||
+    variants[0] ||
+    null;
+
+  /* ==========================================================
+     SIZE OPTIONS
+
+     IMPORTANT:
+     We only show the size selector if Shopify actually
+     contains variants with a "Size" option.
+
+     Therefore:
+
+     Product WITHOUT sizes
+     → No XS/S/M/L buttons
+
+     Product WITH sizes later
+     → Selector automatically appears
+  ========================================================== */
+
+  const sizeOptions = useMemo(() => {
+    const values = variants
+      .map((variant) => {
+        const sizeOption =
+          variant.selectedOptions?.find(
+            (option) =>
+              option.name
+                ?.toLowerCase() ===
+              "size"
+          );
+
+        return (
+          sizeOption?.value || null
+        );
+      })
+      .filter(Boolean);
+
+    const unique =
+      [...new Set(values)];
+
+    return unique.sort(
+      (a, b) => {
+        const aIndex =
+          SIZES.indexOf(
+            a.toUpperCase()
+          );
+
+        const bIndex =
+          SIZES.indexOf(
+            b.toUpperCase()
+          );
+
+        if (
+          aIndex !== -1 &&
+          bIndex !== -1
+        ) {
+          return aIndex - bIndex;
+        }
+
+        if (aIndex !== -1) {
+          return -1;
+        }
+
+        if (bIndex !== -1) {
+          return 1;
+        }
+
+        return a.localeCompare(b);
+      }
+    );
+  }, [variants]);
+
+  /* ==========================================================
+     SELECTED SIZE
+  ========================================================== */
+
+  const selectedSize =
+    useMemo(() => {
+      if (!selectedVariant) {
+        return null;
+      }
+
+      const sizeOption =
+        selectedVariant.selectedOptions?.find(
+          (option) =>
+            option.name
+              ?.toLowerCase() ===
+            "size"
+        );
+
+      return (
+        sizeOption?.value || null
+      );
+    }, [selectedVariant]);
+
+  /* ==========================================================
+     CATEGORY
+  ========================================================== */
+
+  const category =
+    product?.collections
+      ?.nodes?.[0] || null;
+
+  /* ==========================================================
+     PRICE
+  ========================================================== */
+
+  const productPrice =
+    Number(
+      selectedVariant?.price
+        ?.amount || 0
+    );
+
+  const compareAtPrice =
+    Number(
+      selectedVariant
+        ?.compareAtPrice
+        ?.amount || 0
+    );
+
+  const hasDiscount =
+    compareAtPrice > 0 &&
+    compareAtPrice >
+      productPrice;
+
+  /* ==========================================================
+     DESCRIPTION
+  ========================================================== */
+
+  /*
+   * Shopify may contain descriptions such as:
+
+   Premium mul cotton hand block printed dress
+
+   DELIVERY: 12–15 DAYS
+
+   whitespace-pre-line below preserves the line breaks.
+  */
+
+  /* ==========================================================
+     SELECT SIZE
+  ========================================================== */
+
+  const selectSize = (size) => {
+    const matchingVariant =
+      variants.find(
+        (variant) =>
+          variant.selectedOptions?.some(
+            (option) =>
+              option.name
+                ?.toLowerCase() ===
+                "size" &&
+              option.value
+                ?.toLowerCase() ===
+                size.toLowerCase()
+          )
+      );
+
+    if (!matchingVariant) {
+      return;
+    }
+
+    setSelectedVariantId(
+      matchingVariant.id
+    );
+
+    if (
+      matchingVariant.image?.url
+    ) {
+      setMainImage(
+        matchingVariant.image.url
+      );
+    }
   };
 
-  const selectedSizeObj = product?.sizes?.find(
-    (s) => s.id === selectedSize
-  );
+  /* ==========================================================
+     WISHLIST TOGGLE
+  ========================================================== */
+
+  const toggleWishlist = () => {
+    if (!product) return;
+
+    const wishlist =
+      getWishlist();
+
+    const existingIndex =
+      wishlist.findIndex(
+        (item) =>
+          item.id === product.id ||
+          item.handle === product.handle
+      );
+
+    if (existingIndex !== -1) {
+      const updatedWishlist =
+        wishlist.filter(
+          (_, index) =>
+            index !== existingIndex
+        );
+
+      saveWishlist(
+        updatedWishlist
+      );
+
+      setIsWishlisted(false);
+
+      return;
+    }
+
+    const wishlistItem = {
+      id: product.id,
+      handle: product.handle,
+      title: product.title,
+      price: productPrice,
+      image:
+        product.featuredImage
+          ?.url ||
+        images[0]?.url ||
+        "",
+    };
+
+    const updatedWishlist = [
+      ...wishlist,
+      wishlistItem,
+    ];
+
+    saveWishlist(
+      updatedWishlist
+    );
+
+    setIsWishlisted(true);
+  };
+
+  /* ==========================================================
+     REVIEWS
+  ========================================================== */
+
+  const scrollToReviews = () => {
+    reviewsRef.current?.scrollIntoView(
+      {
+        behavior: "smooth",
+      }
+    );
+  };
+
+  /* ==========================================================
+     WHATSAPP
+  ========================================================== */
 
   const handleWhatsApp = () => {
     if (!product) return;
 
-    const phone = "9885033462"; // replace with owner's number
+    /*
+     * Only require a size when the product actually
+     * has Shopify Size variants.
+     */
+    if (
+      sizeOptions.length > 0 &&
+      !selectedSize
+    ) {
+      alert(
+        "Please select a size."
+      );
 
-    const message = `
-      Hi, I'm interested in this product:
-
-      Name: ${product.name}
-      Category: ${product.category?.name || "N/A"}
-      Price: ${formatPrice(product.price)}
-      Size: ${selectedSizeObj?.size || "Not selected"}
-      Link: ${window.location.href}
-
-      Can I customize this?
-          `;
-
-          window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
-    };
-
-    const handleAddToCart = async () => {
-    if (!product) return;
-    if (!user) {
-      alert("Please login to add items to your cart.");
-      return navigate('/login');
-    }
-    if (product.sizes.length > 0 && !selectedSize) {
-      alert("Please select a size.");
       return;
     }
 
-    try {
-      setActionLoading(true);
-      const finalSize = product.sizes.find(s => s.id === selectedSize)?.size || "One Size";
-      console.log("USER:", user); // 🔥 ADDED
+    if (
+      !selectedVariant?.availableForSale
+    ) {
+      alert(
+        "This variant is currently unavailable."
+      );
 
-      const { data: existingItem } = await supabase
-        .from('CartItem')
-        .select('*')
-        .eq('userId', user.id)
-        .eq('productId', product.id)
-        .eq('size', finalSize)
-        .maybeSingle();
+      return;
+    }
 
-      if (existingItem) {
-        const { error } = await supabase
-          .from('CartItem')
-          .update({ quantity: existingItem.quantity + quantity })
-          .eq('id', existingItem.id);
+    const phone =
+      "9885033462";
 
-        console.log("UPDATE ERROR:", error); // 🔥 ADDED
-      } else {
-        const { error } = await supabase
-          .from('CartItem')
-          .insert([{ userId: user.id, productId: product.id, quantity: quantity, size: finalSize }]);
+    const message = `
+Hi, I'm interested in this product:
 
-        console.log("INSERT ERROR:", error); // 🔥 ADDED
+Name: ${product.title}
+
+Category: ${
+      category?.title ||
+      product.productType ||
+      "N/A"
+    }
+
+Price: ${formatPrice(
+      productPrice,
+      selectedVariant
+        ?.price
+        ?.currencyCode ||
+        "INR"
+    )}
+
+Size: ${
+      selectedSize ||
+      selectedVariant?.title ||
+      "One Size"
+    }
+
+Quantity: ${quantity}
+
+Link: ${window.location.href}
+
+Can I customize this?
+    `.trim();
+
+    window.open(
+      `https://wa.me/${phone}?text=${encodeURIComponent(
+        message
+      )}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  };
+
+  /* ==========================================================
+     ADD TO CART
+  ========================================================== */
+
+  const handleAddToCart =
+    async () => {
+      if (
+        !product ||
+        !selectedVariant
+      ) {
+        return;
       }
 
-      window.dispatchEvent(new Event('cartUpdated'));
-      navigate('/cart');
-    } catch (error) {
-      console.error("Error adding to cart:", error);
-    } finally {
-      setActionLoading(false);
-    }
-  }; 
+      /*
+       * Only require size if Shopify has size variants.
+       */
+      if (
+        sizeOptions.length > 0 &&
+        !selectedSize
+      ) {
+        alert(
+          "Please select a size."
+        );
 
-    /*
-  const toggleWishlist = async () => {
-    if (!user) return navigate('/login');
-    const previousState = isWishlisted;
-    setIsWishlisted(!previousState);
-
-    try {
-      if (previousState) {
-        const { error } = await supabase
-          .from('WishlistItem')
-          .delete()
-          .eq('userId', user.id)
-          .eq('productId', product.id);
-
-        console.log("DELETE ERROR:", error); // 🔥 ADDED
-      } else {
-        const { error } = await supabase
-          .from('WishlistItem')
-          .insert([{ userId: user.id, productId: product.id }]);
-
-        console.log("INSERT ERROR:", error); // 🔥 ADDED
+        return;
       }
-    } catch {
-      setIsWishlisted(previousState);
-    }
-  }; */
 
-  const handleSubmitReview = async (e) => {
-  e.preventDefault();
+      if (
+        !selectedVariant.availableForSale
+      ) {
+        alert(
+          "This variant is currently unavailable."
+        );
 
-  const { data: { session } } = await supabase.auth.getSession();
-  const currentUser = session?.user;
+        return;
+      }
 
-  if (!currentUser) return navigate('/login');
+      try {
+        setActionLoading(true);
 
-  if (newRating === 0) return alert("Please select a star rating.");
-  if (!newComment.trim()) return alert("Please write a comment.");
+        let cart = null;
 
-  try {
-    setSubmittingReview(true);
+        /* ----------------------------------------------------
+           Read existing cart
+        ---------------------------------------------------- */
 
-    const { data, error } = await supabase
-      .from('Review')
-      .insert([{
-        userId: currentUser.id,
-        productId: product.id,
-        rating: newRating,
-        comment: newComment.trim()
-      }])
-      .select('*')
-      .single();
+        try {
+          const savedCart =
+            localStorage.getItem(
+              CART_STORAGE_KEY
+            );
 
-    if (error) throw error;
+          if (savedCart) {
+            cart =
+              JSON.parse(
+                savedCart
+              );
+          }
+        } catch {
+          cart = null;
+        }
 
-    setReviews((prev) => [data, ...prev]);
-    setNewComment("");
-    setNewRating(0);
+        /* ----------------------------------------------------
+           Existing cart
+        ---------------------------------------------------- */
 
-  } catch (error) {
-    console.error(error);
-    alert("Failed to submit review.");
-  } finally {
-    setSubmittingReview(false);
+        if (cart?.id) {
+          try {
+            cart =
+              await addToExistingShopifyCart(
+                cart.id,
+                selectedVariant.id,
+                quantity
+              );
+          } catch (error) {
+            console.warn(
+              "Existing Shopify cart could not be updated. Creating a new cart.",
+              error
+            );
+
+            cart =
+              await createShopifyCart(
+                selectedVariant.id,
+                quantity
+              );
+          }
+        }
+
+        /* ----------------------------------------------------
+           New cart
+        ---------------------------------------------------- */
+
+        else {
+          cart =
+            await createShopifyCart(
+              selectedVariant.id,
+              quantity
+            );
+        }
+
+        if (!cart) {
+          throw new Error(
+            "Shopify did not return a cart."
+          );
+        }
+
+        /* ----------------------------------------------------
+           Save cart
+        ---------------------------------------------------- */
+
+        localStorage.setItem(
+          CART_STORAGE_KEY,
+          JSON.stringify(cart)
+        );
+
+        window.dispatchEvent(
+          new Event("cartUpdated")
+        );
+
+        /* ----------------------------------------------------
+           Go to cart
+        ---------------------------------------------------- */
+
+        navigate("/cart");
+      } catch (error) {
+        console.error(
+          "Error adding item to Shopify cart:",
+          error
+        );
+
+        alert(
+          error?.message ||
+            "Unable to add this product to cart. Please try again."
+        );
+      } finally {
+        setActionLoading(
+          false
+        );
+      }
+    };
+
+  /* ==========================================================
+     LOADING
+  ========================================================== */
+
+  if (loading) {
+    return (
+      <div className="min-h-screen pt-40 text-center text-gray-500">
+        <Loader2
+          size={28}
+          className="animate-spin mx-auto mb-4"
+        />
+
+        Loading product details...
+      </div>
+    );
   }
-};
 
-  const formatPrice = (price) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(price);
-  
-  // Calculate Avg Rating
-  const avgRating = reviews.length 
-    ? (reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1)
-    : 0;
+  /* ==========================================================
+     PRODUCT NOT FOUND
+  ========================================================== */
 
-  if (loading) return <div className="pt-40 text-center text-gray-500">Loading product details...</div>;
-  if (!product) return <div className="pt-40 text-center text-red-500">Product not found.</div>;
+  if (!product) {
+    return (
+      <div className="min-h-screen pt-40 text-center px-4">
+        <p className="text-red-500 mb-4">
+          Product not found.
+        </p>
 
-  const sortSizes = (sizes) => {
-    const predefinedOrder = ['XS','S','M','L','XL','XXL','XXXL'];
+        <Link
+          to="/shop/all"
+          className="underline text-sm uppercase tracking-widest"
+        >
+          Back to Shop
+        </Link>
+      </div>
+    );
+  }
 
-    return [...sizes].sort((a, b) => {
-      const aIndex = predefinedOrder.indexOf(a.size);
-      const bIndex = predefinedOrder.indexOf(b.size);
+  /* ==========================================================
+     RENDER
+  ========================================================== */
 
-      // If both sizes exist in predefined list
-      if (aIndex !== -1 && bIndex !== -1) {
-        return aIndex - bIndex;
-      }
-
-      // If only one exists in list
-      if (aIndex !== -1) return -1;
-      if (bIndex !== -1) return 1;
-
-      // Fallback: alphabetical
-      return a.size.localeCompare(b.size);
-  });
-};
   return (
     <div className="bg-white pt-32 pb-20">
-      {/* Breadcrumbs */}
+
+      {/* ======================================================
+          BREADCRUMBS
+      ====================================================== */}
+
       <div className="max-w-7xl mx-auto px-4 mb-8 flex items-center text-xs text-gray-500 uppercase tracking-widest">
-        <Link to="/" className="hover:text-black">Home</Link>
-        <ChevronRight size={12} className="mx-2" />
-        <Link to={`/shop/${product.category?.slug}`} className="hover:text-black">{product.category?.name}</Link>
-        <ChevronRight size={12} className="mx-2" />
-        <span className="text-black font-semibold">{product.name}</span>
+
+        <Link
+          to="/"
+          className="hover:text-black"
+        >
+          Home
+        </Link>
+
+        <ChevronRight
+          size={12}
+          className="mx-2"
+        />
+
+        <Link
+          to="/shop/all"
+          className="hover:text-black"
+        >
+          Shop
+        </Link>
+
+        {category && (
+          <>
+            <ChevronRight
+              size={12}
+              className="mx-2"
+            />
+
+            <Link
+              to={`/shop/${category.handle}`}
+              className="hover:text-black"
+            >
+              {category.title}
+            </Link>
+          </>
+        )}
+
+        <ChevronRight
+          size={12}
+          className="mx-2"
+        />
+
+        <span className="text-black font-semibold truncate">
+          {product.title}
+        </span>
+
       </div>
 
+      {/* ======================================================
+          PRODUCT GRID
+      ====================================================== */}
+
       <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12">
-        {/* LEFT: Image Gallery */}
+
+        {/* ====================================================
+            LEFT — IMAGE GALLERY
+        ==================================================== */}
+
         <div className="space-y-4">
+
           <div className="aspect-[3/4] bg-gray-100 overflow-hidden relative group">
-            <img src={mainImage} alt={product.name} loading="lazy" decoding="async" className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
-          </div>
-          <div className="grid grid-cols-4 gap-4">
-            {product.images && product.images.map((img) => (
-              <button key={img.id} onClick={() => setMainImage(img.url)} className={`aspect-[3/4] overflow-hidden border ${mainImage === img.url ? 'border-black' : 'border-transparent'}`}>
-                <img src={img.url} loading="lazy" decoding="async" className="w-full h-full object-cover" alt="thumbnail" />
-              </button>
-            ))}
-          </div>
-        </div>
 
-        {/* RIGHT: Product Details */}
-        <div className="lg:pl-10 sticky top-32 h-fit">
-          <h1 className="text-3xl md:text-4xl font-serif text-gray-900 mb-2">{product.name}</h1>
-          <p className="text-xl text-gray-600 mb-6 font-light">{formatPrice(product.price)}</p>
-          
-          <div className="flex items-center mb-6 space-x-2">
-            <div className="flex text-[#b08d75]">
-              <span className="font-bold text-lg mr-2 text-black">{avgRating}</span>
-              <Star size={16} fill="currentColor" stroke="none" />
-            </div>
-            <span className="text-gray-300">|</span>
-            <button onClick={scrollToReviews} className="text-sm text-gray-500 hover:text-black underline-offset-4 hover:underline">
-              {reviews.length} Customer Reviews
-            </button>
-          </div>
-
-          <p className="text-gray-600 text-sm leading-relaxed mb-8 whitespace-pre-line">{product.description}</p>
-
-          {/* Size Selector */}
-          {product.sizes && product.sizes.length > 0 && (
-            <div className="mb-8">
-              <div className="flex justify-between mb-2">
-                <span className="text-xs font-bold uppercase tracking-widest">Size</span>
-                <button onClick={() => setOpen(true)}
-                className="text-sm underline text-gray-700">Size Guide</button>
-                {open && (
-                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
-                    <div className="bg-white p-6 rounded-lg max-w-lg w-full">
-
-                      <h2 className="text-lg font-semibold mb-4">Size Guide</h2>
-
-                      <table className="w-full text-sm border">
-                        <thead>
-                          <tr>
-                            <th className="border p-2"></th>
-                            {sizes.map(size => (
-                              <th key={size} className="border p-2">{size}</th>
-                            ))}
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {sizeChart.map(row => (
-                            <tr key={row.label}>
-                              <td className="border p-2 font-medium">{row.label}</td>
-                              {sizes.map(size => (
-                                <td key={size} className="border p-2">
-                                  {row[size]}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-
-                      <button
-                        onClick={() => setOpen(false)}
-                        className="mt-4 w-full bg-black text-white py-2 rounded"
-                      >
-                        Close
-                      </button>
-
-                    </div>
-                  </div>
-                )}
+            {mainImage ? (
+              <img
+                src={mainImage}
+                alt={
+                  product.featuredImage
+                    ?.altText ||
+                  product.title
+                }
+                loading="eager"
+                decoding="async"
+                className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-gray-400">
+                No image available
               </div>
-              <div className="flex gap-3">
-                {sortSizes(product.sizes).map((sizeObj) => (
+            )}
+
+          </div>
+
+          {/* THUMBNAILS */}
+
+          {images.length > 0 && (
+            <div className="grid grid-cols-4 gap-4">
+
+              {images.map(
+                (image) => (
                   <button
-                    key={sizeObj.id}
-                    onClick={() => setSelectedSize(sizeObj.id)}
-                    className={`w-12 h-12 flex items-center justify-center border text-sm transition-all
-                      ${selectedSize === sizeObj.id ? 'border-black bg-black text-white' : 'border-gray-200 hover:border-black text-gray-900'}`}
+                    key={
+                      image.id ||
+                      image.url
+                    }
+                    type="button"
+                    onClick={() =>
+                      setMainImage(
+                        image.url
+                      )
+                    }
+                    className={`aspect-[3/4] overflow-hidden border ${
+                      mainImage ===
+                      image.url
+                        ? "border-black"
+                        : "border-transparent"
+                    }`}
                   >
-                    {sizeObj.size}
+                    <img
+                      src={image.url}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover"
+                      alt={
+                        image.altText ||
+                        product.title
+                      }
+                    />
                   </button>
-                ))}
-              </div>
+                )
+              )}
+
             </div>
           )}
-          
-          {/* WhatsApp Button */}
-          <div className="mb-4">
+
+        </div>
+
+        {/* ====================================================
+            RIGHT — PRODUCT DETAILS
+        ==================================================== */}
+
+        <div className="lg:pl-10 sticky top-32 h-fit">
+
+          {/* --------------------------------------------------
+              TITLE
+          -------------------------------------------------- */}
+
+          <h1 className="text-3xl md:text-4xl font-serif text-gray-900 mb-3">
+            {product.title}
+          </h1>
+
+          {/* --------------------------------------------------
+              PRICE + WISHLIST
+          -------------------------------------------------- */}
+
+          <div className="flex items-start justify-between mb-6">
+
+            <div className="flex items-center gap-3">
+
+              <p className="text-xl text-gray-600 font-light">
+                {formatPrice(
+                  productPrice,
+                  selectedVariant
+                    ?.price
+                    ?.currencyCode ||
+                    "INR"
+                )}
+              </p>
+
+              {hasDiscount && (
+                <p className="text-sm text-gray-400 line-through">
+                  {formatPrice(
+                    compareAtPrice,
+                    selectedVariant
+                      ?.compareAtPrice
+                      ?.currencyCode ||
+                      "INR"
+                  )}
+                </p>
+              )}
+
+            </div>
+
+            {/* WISHLIST */}
+
             <button
-              onClick={handleWhatsApp}
-              disabled={product.sizes.length > 0 && !selectedSize}
-              className={`w-full border border-green-600 py-4 uppercase tracking-[0.2em] text-xs font-bold transition-colors
-                ${product.sizes.length > 0 && !selectedSize 
-                  ? 'opacity-50 cursor-not-allowed text-black border-gray-300'
-                  : 'text-white bg-green-400 hover:bg-white hover:text-green-700 hover:border-green-700'}`}
+              type="button"
+              onClick={
+                toggleWishlist
+              }
+              className="flex items-center gap-2 text-xs uppercase tracking-widest transition-colors hover:text-black"
+              aria-label={
+                isWishlisted
+                  ? "Remove from wishlist"
+                  : "Add to wishlist"
+              }
+            >
+
+              <Heart
+                size={21}
+                strokeWidth={1.8}
+                fill={
+                  isWishlisted
+                    ? "currentColor"
+                    : "none"
+                }
+              />
+
+              <span className="hidden sm:inline">
+                {isWishlisted
+                  ? "Wishlisted"
+                  : "Wishlist"}
+              </span>
+
+            </button>
+
+          </div>
+
+          {/* --------------------------------------------------
+              REVIEWS
+          -------------------------------------------------- */}
+
+          <div className="flex items-center mb-6 space-x-2">
+
+            <div className="flex text-[#b08d75]">
+
+              {[1, 2, 3, 4, 5].map(
+                (star) => (
+                  <Star
+                    key={star}
+                    size={16}
+                    fill="currentColor"
+                    stroke="none"
+                  />
+                )
+              )}
+
+            </div>
+
+            <span className="text-gray-300">
+              |
+            </span>
+
+            <button
+              type="button"
+              onClick={
+                scrollToReviews
+              }
+              className="text-sm text-gray-500 hover:text-black underline-offset-4 hover:underline"
+            >
+              Reviews
+            </button>
+
+          </div>
+
+          {/* --------------------------------------------------
+              PRODUCT DESCRIPTION
+
+              whitespace-pre-line is IMPORTANT.
+              It preserves Shopify line breaks.
+          -------------------------------------------------- */}
+
+          {product.description && (
+            <div className="text-gray-600 text-sm leading-relaxed mb-8 whitespace-pre-line">
+              {product.description}
+            </div>
+          )}
+
+          {/* ==================================================
+              SIZE SELECTOR
+          ================================================== */}
+
+          {sizeOptions.length > 0 && (
+            <div className="mb-8">
+
+              <div className="flex justify-between items-center mb-3">
+
+                <span className="text-xs font-bold uppercase tracking-widest">
+                  Size
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSizeGuideOpen(
+                      true
+                    )
+                  }
+                  className="text-sm underline underline-offset-4 text-gray-700 hover:text-black"
+                >
+                  Size Guide
+                </button>
+
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+
+                {sizeOptions.map(
+                  (size) => {
+
+                    const variantForSize =
+                      variants.find(
+                        (variant) =>
+                          variant.selectedOptions?.some(
+                            (option) =>
+                              option.name
+                                ?.toLowerCase() ===
+                                "size" &&
+                              option.value
+                                ?.toLowerCase() ===
+                                size.toLowerCase()
+                          )
+                      );
+
+                    const isSelected =
+                      selectedSize?.toLowerCase() ===
+                      size.toLowerCase();
+
+                    const unavailable =
+                      variantForSize &&
+                      !variantForSize.availableForSale;
+
+                    return (
+                      <button
+                        key={size}
+                        type="button"
+                        disabled={
+                          unavailable
+                        }
+                        onClick={() =>
+                          selectSize(
+                            size
+                          )
+                        }
+                        className={`w-12 h-12 flex items-center justify-center border text-sm transition-all ${
+                          isSelected
+                            ? "border-black bg-black text-white"
+                            : unavailable
+                            ? "border-gray-100 text-gray-300 cursor-not-allowed line-through"
+                            : "border-gray-200 hover:border-black text-gray-900"
+                        }`}
+                      >
+                        {size}
+                      </button>
+                    );
+                  }
+                )}
+
+              </div>
+
+            </div>
+          )}
+
+          {/* ==================================================
+              SIZE GUIDE
+              
+              ALWAYS VISIBLE
+              
+              This means:
+              - Mug → Size Guide visible
+              - Dress without sizes → Size Guide visible
+              - Dress with sizes → Size selector + Size Guide
+          ================================================== */}
+
+          <div className="mb-8">
+
+            <button
+              type="button"
+              onClick={() =>
+                setSizeGuideOpen(
+                  true
+                )
+              }
+              className="text-sm underline underline-offset-4 text-gray-700 hover:text-black"
+            >
+              Size Guide
+            </button>
+
+          </div>
+
+          {/* ==================================================
+              SIZE GUIDE MODAL
+          ================================================== */}
+
+          {sizeGuideOpen && (
+            <div
+              className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4"
+              onClick={() =>
+                setSizeGuideOpen(
+                  false
+                )
+              }
+            >
+
+              <div
+                className="bg-white p-6 md:p-8 max-w-4xl w-full max-h-[90vh] overflow-auto"
+                onClick={(
+                  event
+                ) =>
+                  event.stopPropagation()
+                }
+              >
+
+                <div className="flex items-center justify-between mb-6">
+
+                  <h2 className="text-xl font-semibold">
+                    Size Guide
+                  </h2>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSizeGuideOpen(
+                        false
+                      )
+                    }
+                    className="text-gray-500 hover:text-black text-2xl leading-none"
+                    aria-label="Close size guide"
+                  >
+                    ×
+                  </button>
+
+                </div>
+
+                <p className="text-sm text-gray-500 mb-6">
+                  All measurements are in inches.
+                </p>
+
+                <div className="overflow-x-auto">
+
+                  <table className="w-full text-sm border-collapse border border-gray-200">
+
+                    <thead>
+                      <tr>
+
+                        <th className="border border-gray-200 p-3 text-left bg-gray-50">
+                          Measurement
+                        </th>
+
+                        {SIZES.map(
+                          (size) => (
+                            <th
+                              key={size}
+                              className="border border-gray-200 p-3 text-center bg-gray-50"
+                            >
+                              {size}
+                            </th>
+                          )
+                        )}
+
+                      </tr>
+                    </thead>
+
+                    <tbody>
+
+                      {SIZE_CHART.map(
+                        (row) => (
+                          <tr
+                            key={
+                              row.label
+                            }
+                          >
+
+                            <td className="border border-gray-200 p-3 font-medium">
+                              {row.label}
+                            </td>
+
+                            {SIZES.map(
+                              (size) => (
+                                <td
+                                  key={
+                                    size
+                                  }
+                                  className="border border-gray-200 p-3 text-center"
+                                >
+                                  {
+                                    row[
+                                      size
+                                    ]
+                                  }
+                                </td>
+                              )
+                            )}
+
+                          </tr>
+                        )
+                      )}
+
+                    </tbody>
+
+                  </table>
+
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSizeGuideOpen(
+                      false
+                    )
+                  }
+                  className="mt-6 w-full bg-black text-white py-3 text-sm uppercase tracking-widest hover:bg-gray-800 transition"
+                >
+                  Close
+                </button>
+
+              </div>
+
+            </div>
+          )}
+
+          {/* ==================================================
+              WHATSAPP
+          ================================================== */}
+
+          <div className="mb-4">
+
+            <button
+              type="button"
+              onClick={
+                handleWhatsApp
+              }
+              disabled={
+                !selectedVariant?.availableForSale ||
+                (sizeOptions.length >
+                  0 &&
+                  !selectedSize)
+              }
+              className={`w-full border py-4 uppercase tracking-[0.2em] text-xs font-bold transition-colors ${
+                !selectedVariant?.availableForSale ||
+                (sizeOptions.length >
+                  0 &&
+                  !selectedSize)
+                  ? "opacity-50 cursor-not-allowed text-black border-gray-300"
+                  : "text-white bg-green-500 border-green-500 hover:bg-white hover:text-green-700 hover:border-green-700"
+              }`}
             >
               Customize on WhatsApp
             </button>
+
           </div>
 
-          {/* Add to Cart Section */}
+          {/* ==================================================
+              QUANTITY
+          ================================================== */}
+
           <div className="mb-8 space-y-4">
-            
-            {/* Quantity Selector */}
+
             <div className="flex items-center border border-gray-200 w-full justify-between px-4 py-4">
-              <button onClick={() => setQuantity(q => Math.max(1, q - 1))}>
-                <Minus size={14} />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setQuantity(
+                    (current) =>
+                      Math.max(
+                        1,
+                        current - 1
+                      )
+                  )
+                }
+                aria-label="Decrease quantity"
+              >
+                <Minus
+                  size={14}
+                />
               </button>
 
-              <span className="text-sm font-medium">{quantity}</span>
+              <span className="text-sm font-medium">
+                {quantity}
+              </span>
 
-              <button onClick={() => setQuantity(q => q + 1)}>
-                <Plus size={14} />
+              <button
+                type="button"
+                onClick={() =>
+                  setQuantity(
+                    (current) =>
+                      current + 1
+                  )
+                }
+                aria-label="Increase quantity"
+              >
+                <Plus
+                  size={14}
+                />
               </button>
+
             </div>
 
-            {/* Add to Cart Button */}
-            <button 
-              onClick={handleAddToCart} 
-              disabled={(product.sizes.length > 0 && !selectedSize) || actionLoading}
-              className={`w-full bg-black text-white uppercase tracking-[0.2em] text-xs font-bold transition-colors py-4 flex items-center justify-center gap-2
-                ${(product.sizes.length > 0 && !selectedSize) 
-                  ? 'opacity-50 cursor-not-allowed' 
-                  : 'hover:bg-gray-800'}`}
+            {/* =================================================
+                ADD TO CART
+            ================================================= */}
+
+            <button
+              type="button"
+              onClick={
+                handleAddToCart
+              }
+              disabled={
+                actionLoading ||
+                !selectedVariant ||
+                !selectedVariant.availableForSale ||
+                (sizeOptions.length >
+                  0 &&
+                  !selectedSize)
+              }
+              className={`w-full bg-black text-white uppercase tracking-[0.2em] text-xs font-bold transition-colors py-4 flex items-center justify-center gap-2 ${
+                actionLoading ||
+                !selectedVariant ||
+                !selectedVariant.availableForSale ||
+                (sizeOptions.length >
+                  0 &&
+                  !selectedSize)
+                  ? "opacity-50 cursor-not-allowed"
+                  : "hover:bg-gray-800"
+              }`}
             >
+
               {actionLoading ? (
-                <Loader2 className="animate-spin" size={16} />
+                <>
+                  <Loader2
+                    className="animate-spin"
+                    size={16}
+                  />
+
+                  Adding...
+                </>
+              ) : !selectedVariant?.availableForSale ? (
+                "Sold Out"
+              ) : sizeOptions.length >
+                0 &&
+                !selectedSize ? (
+                "Select Size"
               ) : (
-                product.sizes.length > 0 && !selectedSize 
-                  ? 'Select Size' 
-                  : 'Add to Cart'
+                "Add to Cart"
               )}
+
             </button>
 
           </div>
+
+          {/* ==================================================
+              PRODUCT INFORMATION
+          ================================================== */}
+
+          <div className="border-t border-gray-100 pt-6 space-y-2 text-xs text-gray-500">
+
+            {product.productType && (
+              <p>
+                <span className="font-semibold text-gray-700">
+                  Type:
+                </span>{" "}
+                {product.productType}
+              </p>
+            )}
+
+            {product.vendor && (
+              <p>
+                <span className="font-semibold text-gray-700">
+                  Brand:
+                </span>{" "}
+                {product.vendor}
+              </p>
+            )}
+
+            <p>
+              <span className="font-semibold text-gray-700">
+                Availability:
+              </span>{" "}
+              {selectedVariant?.availableForSale
+                ? "In stock"
+                : "Sold out"}
+            </p>
+
+          </div>
+
         </div>
+
       </div>
 
-      {/* ================= REVIEWS SECTION (REDESIGNED) ================= */}
-      <div ref={reviewsRef} className="bg-[#f9f9f9] mt-32 py-20">
+      {/* ======================================================
+          CUSTOMER REVIEWS
+      ====================================================== */}
+
+      <div
+        ref={reviewsRef}
+        className="bg-[#f9f9f9] mt-32 py-20"
+      >
+
         <div className="max-w-6xl mx-auto px-4">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl font-serif text-gray-900 mb-4">Customer Reviews</h2>
+
+          <div className="text-center mb-12">
+
+            <h2 className="text-3xl font-serif text-gray-900 mb-4">
+              Customer Reviews
+            </h2>
+
             <div className="flex justify-center items-center gap-2">
-               <span className="text-5xl font-serif text-gray-900">{avgRating}</span>
-               <div className="text-left">
-                 <div className="flex text-[#b08d75] mb-1">
-                   {[...Array(5)].map((_, i) => (
-                      <Star key={i} size={16} fill={i < Math.round(avgRating) ? "currentColor" : "none"} stroke="currentColor" />
-                   ))}
-                 </div>
-                 <p className="text-xs text-gray-500 uppercase tracking-widest">{reviews.length} Reviews</p>
-               </div>
-            </div>
-          </div>
 
-          <div className="grid lg:grid-cols-12 gap-12">
-            
-            {/* Review Form (Left Side) */}
-            <div className="lg:col-span-4">
-              <div className="bg-white p-8 shadow-sm border border-gray-100 sticky top-32">
-                <h3 className="text-lg font-serif mb-6">Write a Review</h3>
-                
-                {user ? (
-                  <form onSubmit={handleSubmitReview} className="space-y-5">
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
-                        How would you rate it?
-                      </label>
-                      <div className="flex gap-1" onMouseLeave={() => setHoverRating(0)}>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <button
-                            key={star}
-                            type="button"
-                            onClick={() => setNewRating(star)}
-                            onMouseEnter={() => setHoverRating(star)}
-                            className="transition-transform hover:scale-110 focus:outline-none"
-                          >
-                            <Star 
-                              size={24} 
-                              className={
-                                (hoverRating || newRating) >= star 
-                                  ? "text-[#b08d75] fill-[#b08d75]" 
-                                  : "text-gray-300"
-                              }
-                            />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+              <span className="text-5xl font-serif text-gray-900">
+                —
+              </span>
 
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
-                        Your Review
-                      </label>
-                      <textarea 
-                        rows="4" 
-                        value={newComment}
-                        onChange={(e) => setNewComment(e.target.value)}
-                        placeholder="Share your thoughts..."
-                        className="w-full bg-gray-50 border border-gray-200 p-4 text-sm focus:outline-none focus:border-black focus:bg-white transition-colors resize-none"
-                      ></textarea>
-                    </div>
+              <div className="text-left">
 
-                    <button 
-                      disabled={submittingReview}
-                      className="w-full bg-black text-white py-4 uppercase tracking-[0.2em] text-xs font-bold hover:bg-gray-800 transition-colors disabled:opacity-70"
-                    >
-                      {submittingReview ? "Submitting..." : "Post Review"}
-                    </button>
-                  </form>
-                ) : (
-                  <div className="text-center py-8">
-                    <MessageSquare className="mx-auto text-gray-300 mb-3" size={32} />
-                    <p className="text-sm text-gray-500 mb-4">Please log in to share your experience.</p>
-                    <Link to="/login" className="inline-block border-b border-black pb-1 text-xs font-bold uppercase tracking-widest hover:text-gray-600">
-                      Login to Review
-                    </Link>
-                  </div>
-                )}
-              </div>
-            </div>
+                <div className="flex text-[#b08d75] mb-1">
 
-            {/* Reviews List (Right Side) */}
-            <div className="lg:col-span-8 space-y-6">
-              {reviews.length === 0 ? (
-                <div className="bg-white p-12 text-center border border-dashed border-gray-300">
-                  <p className="text-gray-400 italic">No reviews yet. Be the first to share your thoughts!</p>
+                  {[1, 2, 3, 4, 5].map(
+                    (star) => (
+                      <Star
+                        key={star}
+                        size={16}
+                        fill="currentColor"
+                        stroke="none"
+                      />
+                    )
+                  )}
+
                 </div>
-              ) : (
-                reviews.map((review) => (
-                  <div key={review.id} className="bg-white p-8 border border-gray-100 shadow-sm">
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 font-serif font-bold text-lg">
-                          {review.user?.fullName?.[0] || "A"}
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-gray-900">
-                            {review.user?.fullName || "Anonymous Customer"}
-                          </h4>
-                          <span className="text-xs text-gray-400">Verified Buyer</span>
-                        </div>
-                      </div>
-                      <span className="text-xs text-gray-400">
-                        {new Date(review.createdAt).toLocaleDateString("en-US", { year: 'numeric', month: 'short', day: 'numeric' })}
-                      </span>
-                    </div>
 
-                    <div className="flex text-[#b08d75] mb-4">
-                      {[...Array(5)].map((_, i) => (
-                        <Star key={i} size={14} fill={i < review.rating ? "currentColor" : "none"} stroke="currentColor" />
-                      ))}
-                    </div>
+                <p className="text-xs text-gray-500 uppercase tracking-widest">
+                  Reviews coming soon
+                </p>
 
-                    <p className="text-gray-700 text-sm leading-relaxed">
-                      "{review.comment}"
-                    </p>
-                  </div>
-                ))
-              )}
+              </div>
+
             </div>
 
           </div>
+
+          <div className="max-w-2xl mx-auto bg-white p-12 text-center border border-dashed border-gray-300">
+
+            <MessageSquare
+              className="mx-auto text-gray-300 mb-4"
+              size={36}
+            />
+
+            <p className="text-gray-500 mb-2">
+              Customer reviews will be connected soon.
+            </p>
+
+            <p className="text-xs text-gray-400">
+              We are setting up the review system next.
+            </p>
+
+          </div>
+
         </div>
+
       </div>
-     </div>
-  
+
+    </div>
   );
 };
 
