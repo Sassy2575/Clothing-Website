@@ -101,6 +101,12 @@ export async function getShopifyProducts(first = 20) {
                 name
                 value
               }
+
+              image {
+                id
+                url
+                altText
+              }
             }
           }
         }
@@ -133,8 +139,39 @@ export async function getShopifyProductByHandle(handle) {
 
         images(first: 20) {
           nodes {
+            id
             url
             altText
+          }
+        }
+
+
+        media(first: 50) {
+          nodes {
+            __typename
+
+            ... on MediaImage {
+              id
+              image {
+                url
+                altText
+              }
+            }
+
+            ... on Video {
+              id
+              previewImage {
+                url
+                altText
+              }
+              sources {
+                url
+                mimeType
+                format
+                width
+                height
+              }
+            }
           }
         }
 

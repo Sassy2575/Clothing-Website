@@ -12,6 +12,7 @@ const Home = () => {
   const [featuredProducts, setFeaturedProducts] = useState([]);
   const [slides, setSlides] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
 
   // ================= SHOPIFY PRODUCTS =================
   useEffect(() => {
@@ -125,9 +126,81 @@ const Home = () => {
   }, []);
 
   // ================= REVIEWS =================
-  // Shopify review system will be connected later.
+  // Fetch the latest published product reviews from Judge.me.
   useEffect(() => {
-    setReviews([]);
+    let cancelled = false;
+
+    const fetchReviews = async () => {
+      const shopDomain =
+        import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
+
+      const publicToken =
+        import.meta.env.VITE_JUDGEME_PUBLIC_TOKEN;
+
+      if (!shopDomain || !publicToken) {
+        console.error(
+          "Missing Judge.me configuration for homepage reviews."
+        );
+        setReviewsLoading(false);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({
+          shop_domain: shopDomain,
+          api_token: publicToken,
+          page: "1",
+          per_page: "6",
+          json_request: "true",
+        });
+
+        const response = await fetch(
+          `https://judge.me/api/v1/widgets/all_reviews_page?${params.toString()}`
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Judge.me reviews request failed (${response.status})`
+          );
+        }
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        const latestReviews = Array.isArray(data?.reviews)
+          ? data.reviews
+              .filter((review) => review?.product_title)
+              .sort(
+                (a, b) =>
+                  new Date(b.created_at || 0) -
+                  new Date(a.created_at || 0)
+              )
+              .slice(0, 6)
+          : [];
+
+        setReviews(latestReviews);
+      } catch (error) {
+        console.error(
+          "Error fetching Judge.me homepage reviews:",
+          error
+        );
+
+        if (!cancelled) {
+          setReviews([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setReviewsLoading(false);
+        }
+      }
+    };
+
+    fetchReviews();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ================= MAIN IMAGE =================
@@ -357,61 +430,116 @@ const Home = () => {
             Stories of Love
           </h2>
 
-          {reviews.length === 0 ? (
+          {reviewsLoading ? (
+            <p className="text-center text-gray-400">
+              Loading customer reviews...
+            </p>
+          ) : reviews.length === 0 ? (
             <p className="text-center text-gray-400">
               Reviews coming soon...
             </p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
 
-              {reviews.map((review) => (
+              {reviews.map((review) => {
+                const productPath = review.product_url
+                  ? review.product_url.replace(
+                      /^\/products\//,
+                      "/product/"
+                    )
+                  : null;
 
-                <div
-                  key={review.id}
-                  className="bg-white p-8 border border-gray-100 shadow-sm text-center flex flex-col items-center cursor-pointer hover:shadow-md transition-shadow"
-                >
+                const reviewerName =
+                  review.reviewer_name ||
+                  "Anonymous";
 
-                  <div className="flex justify-center mb-4 text-[#b08d75]">
+                const reviewDate = review.created_at
+                  ? new Date(
+                      review.created_at
+                    ).toLocaleDateString("en-IN", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })
+                  : null;
 
-                    {[...Array(5)].map((_, i) => (
-                      <Star
-                        key={i}
-                        size={14}
-                        fill={
-                          i < review.rating
-                            ? 'currentColor'
-                            : 'none'
-                        }
-                        stroke={
-                          i < review.rating
-                            ? 'none'
-                            : 'currentColor'
-                        }
+                const card = (
+                  <>
+                    {review.product_variant_image_url && (
+                      <img
+                        src={review.product_variant_image_url}
+                        alt={review.product_title || "Product"}
+                        className="w-16 h-20 object-cover mb-5"
+                        loading="lazy"
                       />
-                    ))}
+                    )}
 
-                  </div>
-
-                  <h4 className="text-lg font-serif mb-6 italic text-gray-800 leading-relaxed">
-                    "{review.comment}"
-                  </h4>
-
-                  <div className="mt-auto">
-
-                    <div className="text-xs text-gray-900 font-bold uppercase tracking-widest mb-1">
-                      {review.user?.fullName ||
-                        'Verified Customer'}
+                    <div className="flex justify-center mb-4 text-[#b08d75]">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Star
+                          key={star}
+                          size={14}
+                          fill={
+                            star <= Number(review.rating || 0)
+                              ? "currentColor"
+                              : "none"
+                          }
+                          stroke={
+                            star <= Number(review.rating || 0)
+                              ? "none"
+                              : "currentColor"
+                          }
+                        />
+                      ))}
                     </div>
 
-                    <div className="text-[10px] text-gray-500 uppercase tracking-wide">
-                      on {review.product?.name || 'Product'}
+                    {review.title && (
+                      <h4 className="text-lg font-serif italic text-gray-800 mb-3">
+                        “{review.title}”
+                      </h4>
+                    )}
+
+                    {review.body && (
+                      <p className="text-sm text-gray-600 leading-relaxed mb-6">
+                        {review.body}
+                      </p>
+                    )}
+
+                    <div className="mt-auto">
+                      <div className="text-xs text-gray-900 font-bold uppercase tracking-widest mb-1">
+                        {reviewerName}
+                      </div>
+
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wide">
+                        {review.product_title}
+                      </div>
+
+                      {reviewDate && (
+                        <div className="text-[10px] text-gray-400 mt-1">
+                          {reviewDate}
+                        </div>
+                      )}
                     </div>
+                  </>
+                );
 
+                return productPath ? (
+                  <Link
+                    key={review.uuid || review.id}
+                    to={productPath}
+                    className="bg-white p-8 border border-gray-100 shadow-sm text-center flex flex-col items-center hover:shadow-md transition-shadow"
+                  >
+                    {card}
+                  </Link>
+                ) : (
+                  <div
+                    key={review.uuid || review.id}
+                    className="bg-white p-8 border border-gray-100 shadow-sm text-center flex flex-col items-center"
+                  >
+                    {card}
                   </div>
-
-                </div>
-
-              ))}
+                );
+              })}
 
             </div>
           )}

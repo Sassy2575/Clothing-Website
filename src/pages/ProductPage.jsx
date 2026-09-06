@@ -437,6 +437,9 @@ const ProductPage = () => {
   const [mainImage, setMainImage] =
     useState("");
 
+  const [activeMedia, setActiveMedia] =
+    useState(0);
+
   const [loading, setLoading] =
     useState(true);
 
@@ -445,7 +448,25 @@ const ProductPage = () => {
     setActionLoading,
   ] = useState(false);
 
-  /* ----------------------------------------------------------
+  
+  const [judgeMeReviews, setJudgeMeReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviewsError, setReviewsError] = useState("");
+  const [reviewsPage, setReviewsPage] = useState(1);
+  const [reviewsTotalPages, setReviewsTotalPages] = useState(0);
+
+  const [reviewFormOpen, setReviewFormOpen] = useState(false);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewTitle, setReviewTitle] = useState("");
+  const [reviewBody, setReviewBody] = useState("");
+  const [reviewName, setReviewName] = useState("");
+  const [reviewEmail, setReviewEmail] = useState("");
+  const [reviewAnonymous, setReviewAnonymous] = useState(false);
+  const [reviewWebsite, setReviewWebsite] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewSubmitError, setReviewSubmitError] = useState("");
+  const [reviewSubmitSuccess, setReviewSubmitSuccess] = useState("");
+/* ----------------------------------------------------------
      SIZE GUIDE
   ---------------------------------------------------------- */
 
@@ -487,11 +508,6 @@ const ProductPage = () => {
             handle
           );
 
-        console.log(
-          "SHOPIFY PRODUCT PAGE:",
-          productData
-        );
-
         if (cancelled) return;
 
         if (!productData) {
@@ -506,14 +522,34 @@ const ProductPage = () => {
 
         setProduct(productData);
 
-        const images =
-          productData.images?.nodes || [];
+        const shopifyMedia =
+          productData.media?.nodes || [];
 
-        setMainImage(
-          productData.featuredImage?.url ||
-            images[0]?.url ||
-            ""
-        );
+        const firstMedia =
+          shopifyMedia.find(
+            (item) =>
+              item?.__typename === "MediaImage" ||
+              item?.__typename === "Video"
+          );
+
+        if (firstMedia?.__typename === "MediaImage") {
+          setMainImage(firstMedia.image?.url || "");
+        } else if (firstMedia?.__typename === "Video") {
+          const source =
+            firstMedia.sources?.find((item) =>
+              item?.mimeType?.startsWith("video/")
+            ) || firstMedia.sources?.[0];
+
+          setMainImage(source?.url || "");
+        } else {
+          setMainImage(
+            productData.featuredImage?.url ||
+              productData.images?.nodes?.[0]?.url ||
+              ""
+          );
+        }
+
+        setActiveMedia(0);
 
         const variants =
           productData.variants?.nodes || [];
@@ -584,6 +620,62 @@ const ProductPage = () => {
 
   const images =
     product?.images?.nodes || [];
+
+  /*
+   * Shopify's media connection is intentionally used as-is.
+   * This preserves the exact order of images/videos uploaded
+   * under the product in Shopify.
+   */
+  const productMedia = useMemo(() => {
+    const shopifyMedia = product?.media?.nodes || [];
+
+    if (shopifyMedia.length > 0) {
+      return shopifyMedia
+        .map((item) => {
+          if (item?.__typename === "MediaImage" && item.image?.url) {
+            return {
+              id: item.id,
+              type: "image",
+              url: item.image.url,
+              altText: item.image.altText || product?.title || "",
+            };
+          }
+
+          if (item?.__typename === "Video") {
+            const source =
+              item.sources?.find((source) =>
+                source?.mimeType?.startsWith("video/")
+              ) || item.sources?.[0];
+
+            if (source?.url) {
+              return {
+                id: item.id,
+                type: "video",
+                url: source.url,
+                poster: item.previewImage?.url || "",
+                altText:
+                  item.previewImage?.altText ||
+                  product?.title ||
+                  "",
+              };
+            }
+          }
+
+          return null;
+        })
+        .filter(Boolean);
+    }
+
+    /*
+     * Fallback for products that have not returned media yet.
+     */
+    return images.map((image, index) => ({
+      id: image.id || `image-${index}`,
+      type: "image",
+      url: image.url,
+      altText: image.altText || product?.title || "",
+    }));
+  }, [product, images]);
 
   const selectedVariant =
     variants.find(
@@ -755,12 +847,18 @@ const ProductPage = () => {
       matchingVariant.id
     );
 
-    if (
-      matchingVariant.image?.url
-    ) {
-      setMainImage(
-        matchingVariant.image.url
+    if (matchingVariant.image?.url) {
+      const mediaIndex = productMedia.findIndex(
+        (item) =>
+          item.type === "image" &&
+          item.url === matchingVariant.image.url
       );
+
+      if (mediaIndex >= 0) {
+        setActiveMedia(mediaIndex);
+      } else {
+        setMainImage(matchingVariant.image.url);
+      }
     }
   };
 
@@ -825,12 +923,203 @@ const ProductPage = () => {
      REVIEWS
   ========================================================== */
 
-  const scrollToReviews = () => {
-    reviewsRef.current?.scrollIntoView(
-      {
-        behavior: "smooth",
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchJudgeMeReviews = async () => {
+      if (!product?.id || !product?.handle) {
+        return;
       }
-    );
+
+      const publicToken =
+        import.meta.env.VITE_JUDGEME_PUBLIC_TOKEN;
+      const shopDomain =
+        import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
+
+      if (!publicToken || !shopDomain) {
+        if (!cancelled) {
+          setJudgeMeReviews([]);
+          setReviewsTotalPages(0);
+          setReviewsError(
+            "Judge.me is not configured. Add VITE_JUDGEME_PUBLIC_TOKEN to your .env file."
+          );
+          setReviewsLoading(false);
+        }
+        return;
+      }
+
+      try {
+        setReviewsLoading(true);
+        setReviewsError("");
+
+        // Shopify Storefront API returns product IDs as GIDs.
+        // Judge.me accepts the numeric Shopify product ID as external_id.
+        const externalId = String(product.id)
+          .split("/")
+          .pop();
+
+        const params = new URLSearchParams({
+          shop_domain: shopDomain,
+          api_token: publicToken,
+          handle: product.handle,
+          external_id: externalId,
+          page: String(reviewsPage),
+          per_page: "5",
+          json_request: "true",
+        });
+
+        const response = await fetch(
+          `https://judge.me/api/v1/widgets/product_review?${params.toString()}`
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Judge.me request failed (${response.status}).`
+          );
+        }
+
+        const result = await response.json();
+
+        if (cancelled) return;
+
+        setJudgeMeReviews(
+          Array.isArray(result?.reviews)
+            ? result.reviews
+            : []
+        );
+        setReviewsTotalPages(
+          Number(result?.total_pages) || 0
+        );
+      } catch (error) {
+        console.error(
+          "ERROR LOADING JUDGE.ME REVIEWS:",
+          error
+        );
+
+        if (!cancelled) {
+          setJudgeMeReviews([]);
+          setReviewsTotalPages(0);
+          setReviewsError(
+            error?.message ||
+              "Unable to load customer reviews."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setReviewsLoading(false);
+        }
+      }
+    };
+
+    fetchJudgeMeReviews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [product?.id, product?.handle, reviewsPage]);
+
+  /* ==========================================================
+     REVIEW SUBMISSION
+  ========================================================== */
+
+  const openReviewForm = () => {
+    setReviewSubmitError("");
+    setReviewSubmitSuccess("");
+    setReviewFormOpen(true);
+  };
+
+  const closeReviewForm = () => {
+    if (reviewSubmitting) return;
+    setReviewFormOpen(false);
+    setReviewSubmitError("");
+  };
+
+  const submitReview = async (event) => {
+    event.preventDefault();
+
+    if (!product?.id || reviewSubmitting) return;
+
+    setReviewSubmitError("");
+    setReviewSubmitSuccess("");
+
+    if (!reviewRating) {
+      setReviewSubmitError("Please select a rating from 1 to 5.");
+      return;
+    }
+    if (!reviewTitle.trim()) {
+      setReviewSubmitError("Please enter a review title.");
+      return;
+    }
+    if (!reviewBody.trim()) {
+      setReviewSubmitError("Please enter your review.");
+      return;
+    }
+    if (!reviewName.trim()) {
+      setReviewSubmitError("Please enter your name.");
+      return;
+    }
+    if (!reviewEmail.trim()) {
+      setReviewSubmitError("Please enter your email address.");
+      return;
+    }
+
+    setReviewSubmitting(true);
+
+    try {
+      const response = await fetch("/api/judgeme-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: product.id,
+          rating: reviewRating,
+          title: reviewTitle,
+          body: reviewBody,
+          name: reviewName,
+          email: reviewEmail,
+          anonymous: reviewAnonymous,
+          website: reviewWebsite,
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.error || "Unable to submit your review right now.");
+      }
+
+      setReviewSubmitSuccess(
+        result?.message || "Thank you! Your review has been submitted."
+      );
+      setReviewTitle("");
+      setReviewBody("");
+      setReviewName("");
+      setReviewEmail("");
+      setReviewRating(0);
+      setReviewAnonymous(false);
+      setReviewWebsite("");
+
+      window.setTimeout(() => {
+        setReviewsPage(1);
+        setReviewFormOpen(false);
+        setReviewSubmitSuccess("");
+      }, 1200);
+    } catch (error) {
+      setReviewSubmitError(
+        error?.message || "Unable to submit your review right now. Please try again."
+      );
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
+  /* ==========================================================
+     REVIEWS
+  ========================================================== */
+
+  const scrollToReviews = () => {
+    reviewsRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   /* ==========================================================
@@ -1161,12 +1450,24 @@ Can I customize this?
 
           <div className="aspect-[3/4] bg-gray-100 overflow-hidden relative group">
 
-            {mainImage ? (
+            {productMedia[activeMedia]?.type === "video" ? (
+              <video
+                key={productMedia[activeMedia].url}
+                src={productMedia[activeMedia].url}
+                poster={
+                  productMedia[activeMedia].poster ||
+                  undefined
+                }
+                controls
+                playsInline
+                preload="metadata"
+                className="w-full h-full object-cover"
+              />
+            ) : productMedia[activeMedia]?.url ? (
               <img
-                src={mainImage}
+                src={productMedia[activeMedia].url}
                 alt={
-                  product.featuredImage
-                    ?.altText ||
+                  productMedia[activeMedia].altText ||
                   product.title
                 }
                 loading="eager"
@@ -1175,50 +1476,72 @@ Can I customize this?
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400">
-                No image available
+                No media available
               </div>
             )}
 
           </div>
 
-          {/* THUMBNAILS */}
+          {/* THUMBNAILS
+              IMPORTANT: productMedia is NOT split into
+              images/videos. It is rendered in the exact
+              order Shopify returns it. */}
 
-          {images.length > 0 && (
+          {productMedia.length > 0 && (
             <div className="grid grid-cols-4 gap-4">
 
-              {images.map(
-                (image) => (
-                  <button
-                    key={
-                      image.id ||
-                      image.url
+              {productMedia.map((item, index) => (
+                <button
+                  key={item.id || `${item.type}-${item.url}`}
+                  type="button"
+                  onClick={() => {
+                    setActiveMedia(index);
+
+                    if (item.type === "image") {
+                      setMainImage(item.url);
+                    } else {
+                      setMainImage(item.url);
                     }
-                    type="button"
-                    onClick={() =>
-                      setMainImage(
-                        image.url
-                      )
-                    }
-                    className={`aspect-[3/4] overflow-hidden border ${
-                      mainImage ===
-                      image.url
-                        ? "border-black"
-                        : "border-transparent"
-                    }`}
-                  >
+                  }}
+                  className={`relative aspect-[3/4] overflow-hidden border ${
+                    activeMedia === index
+                      ? "border-black"
+                      : "border-transparent"
+                  }`}
+                >
+                  {item.type === "video" ? (
+                    <>
+                      {item.poster ? (
+                        <img
+                          src={item.poster}
+                          alt={item.altText || product.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <video
+                          src={item.url}
+                          muted
+                          playsInline
+                          preload="metadata"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/20 text-white text-xs">
+                        ▶
+                      </span>
+                    </>
+                  ) : (
                     <img
-                      src={image.url}
+                      src={item.url}
                       loading="lazy"
                       decoding="async"
                       className="w-full h-full object-cover"
-                      alt={
-                        image.altText ||
-                        product.title
-                      }
+                      alt={item.altText || product.title}
                     />
-                  </button>
-                )
-              )}
+                  )}
+                </button>
+              ))}
 
             </div>
           )}
@@ -1350,9 +1673,31 @@ Can I customize this?
               It preserves Shopify line breaks.
           -------------------------------------------------- */}
 
-          {product.description && (
-            <div className="text-gray-600 text-sm leading-relaxed mb-8 whitespace-pre-line">
-              {product.description}
+          {(product.descriptionHtml || product.description) && (
+            <div
+              className="text-gray-600 text-sm leading-relaxed mb-8
+                [&_p]:mb-4
+                [&_p:last-child]:mb-0
+                [&_br]:content-['']
+                [&_strong]:font-semibold
+                [&_em]:italic
+                [&_ul]:list-disc
+                [&_ul]:pl-5
+                [&_ol]:list-decimal
+                [&_ol]:pl-5
+                [&_li]:mb-1"
+            >
+              {product.descriptionHtml ? (
+                <div
+                  dangerouslySetInnerHTML={{
+                    __html: product.descriptionHtml,
+                  }}
+                />
+              ) : (
+                <div className="whitespace-pre-line">
+                  {product.description}
+                </div>
+              )}
             </div>
           )}
 
@@ -1785,53 +2130,293 @@ Can I customize this?
               Customer Reviews
             </h2>
 
-            <div className="flex justify-center items-center gap-2">
-
-              <span className="text-5xl font-serif text-gray-900">
-                —
-              </span>
-
-              <div className="text-left">
-
-                <div className="flex text-[#b08d75] mb-1">
-
-                  {[1, 2, 3, 4, 5].map(
-                    (star) => (
-                      <Star
-                        key={star}
-                        size={16}
-                        fill="currentColor"
-                        stroke="none"
-                      />
-                    )
-                  )}
-
-                </div>
-
-                <p className="text-xs text-gray-500 uppercase tracking-widest">
-                  Reviews coming soon
-                </p>
-
-              </div>
-
-            </div>
+            <p className="text-sm text-gray-500">
+              Reviews powered by Judge.me
+            </p>
 
           </div>
 
-          <div className="max-w-2xl mx-auto bg-white p-12 text-center border border-dashed border-gray-300">
+          <div className="max-w-4xl mx-auto bg-white p-6 md:p-10 border border-gray-200">
 
-            <MessageSquare
-              className="mx-auto text-gray-300 mb-4"
-              size={36}
-            />
+            {reviewsLoading && (
+              <div className="flex items-center justify-center gap-3 py-12 text-gray-500">
+                <Loader2 className="animate-spin" size={20} />
+                <span className="text-sm">Loading reviews...</span>
+              </div>
+            )}
 
-            <p className="text-gray-500 mb-2">
-              Customer reviews will be connected soon.
-            </p>
+            {!reviewsLoading && reviewsError && (
+              <div className="py-10 text-center">
+                <MessageSquare
+                  className="mx-auto text-gray-300 mb-4"
+                  size={36}
+                />
+                <p className="text-sm text-gray-500">
+                  {reviewsError}
+                </p>
+              </div>
+            )}
 
-            <p className="text-xs text-gray-400">
-              We are setting up the review system next.
-            </p>
+            {!reviewsLoading &&
+              !reviewsError &&
+              judgeMeReviews.length === 0 && (
+                <div className="py-10 text-center">
+                  <MessageSquare
+                    className="mx-auto text-gray-300 mb-4"
+                    size={36}
+                  />
+                  <p className="text-sm text-gray-500">
+                    No reviews yet. Be the first to review this product.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openReviewForm}
+                    className="mt-5 inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
+                  >
+                    Write the First Review
+                  </button>
+                </div>
+              )}
+
+            {!reviewsLoading &&
+              !reviewsError &&
+              judgeMeReviews.length > 0 && (
+                <div className="space-y-8">
+                  {judgeMeReviews.map((review) => (
+                    <article
+                      key={review.uuid}
+                      className="border-b border-gray-200 pb-8 last:border-b-0 last:pb-0"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="flex items-center gap-1" aria-label={`${review.rating} out of 5 stars`}>
+                            {Array.from({ length: 5 }).map((_, index) => (
+                              <Star
+                                key={index}
+                                size={16}
+                                className={
+                                  index < Number(review.rating || 0)
+                                    ? "fill-current text-gray-900"
+                                    : "text-gray-300"
+                                }
+                              />
+                            ))}
+                          </div>
+
+                          <h3 className="mt-3 text-base font-medium text-gray-900">
+                            {review.title || "Customer review"}
+                          </h3>
+                        </div>
+
+                        {review.created_at && (
+                          <time
+                            className="shrink-0 text-xs text-gray-400"
+                            dateTime={review.created_at}
+                          >
+                            {new Date(review.created_at).toLocaleDateString(
+                              "en-IN",
+                              {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              }
+                            )}
+                          </time>
+                        )}
+                      </div>
+
+                      {review.body_html ? (
+                        <div
+                          className="mt-3 text-sm leading-7 text-gray-600 [&_p]:mb-2 [&_p:last-child]:mb-0"
+                          dangerouslySetInnerHTML={{
+                            __html: review.body_html,
+                          }}
+                        />
+                      ) : review.body ? (
+                        <p className="mt-3 text-sm leading-7 text-gray-600">
+                          {review.body}
+                        </p>
+                      ) : null}
+
+                      <p className="mt-4 text-xs text-gray-400">
+                        — {review.is_anonymous_reviewer
+                          ? "Anonymous"
+                          : review.reviewer_name || "Customer"}
+                      </p>
+                    </article>
+                  ))}
+
+                  {reviewsTotalPages > 1 && (
+                    <div className="flex items-center justify-center gap-4 pt-2">
+                      <button
+                        type="button"
+                        disabled={reviewsPage <= 1}
+                        onClick={() =>
+                          setReviewsPage((page) => Math.max(1, page - 1))
+                        }
+                        className="px-4 py-2 border border-gray-300 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Previous
+                      </button>
+
+                      <span className="text-xs text-gray-500">
+                        Page {reviewsPage} of {reviewsTotalPages}
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled={reviewsPage >= reviewsTotalPages}
+                        onClick={() =>
+                          setReviewsPage((page) =>
+                            Math.min(reviewsTotalPages, page + 1)
+                          )
+                        }
+                        className="px-4 py-2 border border-gray-300 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            {reviewFormOpen && (
+              <form
+                onSubmit={submitReview}
+                className="mt-10 border-t border-gray-200 pt-10"
+              >
+                <div className="flex items-start justify-between gap-4 mb-8">
+                  <div>
+                    <h3 className="text-xl font-serif text-gray-900">Write a Review</h3>
+                    <p className="mt-1 text-sm text-gray-500">Share your experience with this product.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeReviewForm}
+                    disabled={reviewSubmitting}
+                    className="text-sm text-gray-500 hover:text-gray-900 disabled:opacity-40"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="mb-6">
+                  <p className="mb-2 text-sm font-medium text-gray-900">Your rating</p>
+                  <div className="flex items-center gap-2" role="radiogroup" aria-label="Product rating">
+                    {Array.from({ length: 5 }).map((_, index) => {
+                      const value = index + 1;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setReviewRating(value)}
+                          className="p-1"
+                          aria-label={`${value} star${value === 1 ? "" : "s"}`}
+                          aria-pressed={reviewRating === value}
+                        >
+                          <Star
+                            size={24}
+                            className={value <= reviewRating ? "fill-current text-gray-900" : "text-gray-300"}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid gap-5">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-gray-900" htmlFor="review-title">Review title</label>
+                    <input
+                      id="review-title"
+                      value={reviewTitle}
+                      onChange={(event) => setReviewTitle(event.target.value)}
+                      maxLength={150}
+                      autoComplete="off"
+                      className="w-full border border-gray-300 px-4 py-3 text-sm outline-none focus:border-gray-900"
+                      placeholder="What did you think?"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-gray-900" htmlFor="review-body">Your review</label>
+                    <textarea
+                      id="review-body"
+                      value={reviewBody}
+                      onChange={(event) => setReviewBody(event.target.value)}
+                      maxLength={5000}
+                      rows={6}
+                      className="w-full resize-y border border-gray-300 px-4 py-3 text-sm outline-none focus:border-gray-900"
+                      placeholder="Tell us about your experience..."
+                    />
+                  </div>
+
+                  <div className="grid gap-5 md:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-gray-900" htmlFor="review-name">Your name</label>
+                      <input
+                        id="review-name"
+                        value={reviewName}
+                        onChange={(event) => setReviewName(event.target.value)}
+                        maxLength={120}
+                        autoComplete="name"
+                        className="w-full border border-gray-300 px-4 py-3 text-sm outline-none focus:border-gray-900"
+                        placeholder="Your name"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-gray-900" htmlFor="review-email">Email</label>
+                      <input
+                        id="review-email"
+                        type="email"
+                        value={reviewEmail}
+                        onChange={(event) => setReviewEmail(event.target.value)}
+                        maxLength={254}
+                        autoComplete="email"
+                        className="w-full border border-gray-300 px-4 py-3 text-sm outline-none focus:border-gray-900"
+                        placeholder="you@example.com"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-3 text-sm text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={reviewAnonymous}
+                      onChange={(event) => setReviewAnonymous(event.target.checked)}
+                      className="mt-1"
+                    />
+                    <span>Post this review anonymously.</span>
+                  </label>
+
+                  <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">
+                    <label htmlFor="review-website">Website</label>
+                    <input
+                      id="review-website"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={reviewWebsite}
+                      onChange={(event) => setReviewWebsite(event.target.value)}
+                    />
+                  </div>
+
+                  {reviewSubmitError && (
+                    <p className="text-sm text-red-600" role="alert">{reviewSubmitError}</p>
+                  )}
+                  {reviewSubmitSuccess && (
+                    <p className="text-sm text-green-700" role="status">{reviewSubmitSuccess}</p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={reviewSubmitting}
+                    className="inline-flex w-full items-center justify-center bg-gray-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
+                  >
+                    {reviewSubmitting ? "Submitting..." : "Submit Review"}
+                  </button>
+                </div>
+              </form>
+            )}
 
           </div>
 
