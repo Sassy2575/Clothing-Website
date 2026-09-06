@@ -10,15 +10,12 @@ function normalizeProductId(productId) {
 
   const value = String(productId).trim();
 
-  // Shopify GraphQL ID:
-  // gid://shopify/Product/123456789
   const match = value.match(/\/Product\/(\d+)$/);
 
   if (match) {
     return match[1];
   }
 
-  // Already a numeric Shopify product ID
   if (/^\d+$/.test(value)) {
     return value;
   }
@@ -41,48 +38,62 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-
-    return res.status(405).json({
-      error: "Method not allowed",
-    });
-  }
-
-  // Server-side Vercel environment variables.
-  // NEVER expose the private Judge.me token to frontend/Vite code.
+export async function POST(request) {
   const privateToken = process.env.JUDGEME_PRIVATE_TOKEN;
   const shopDomain = process.env.JUDGEME_SHOP_DOMAIN;
 
   if (!privateToken || !shopDomain) {
     console.error("Judge.me server configuration is missing.");
 
-    return res.status(500).json({
-      error: "Review service is temporarily unavailable.",
-    });
+    return Response.json(
+      {
+        error:
+          "Review service is temporarily unavailable.",
+      },
+      { status: 500 }
+    );
   }
 
   const contentLength = Number(
-    req.headers["content-length"] || 0
+    request.headers.get("content-length") || 0
   );
 
   if (contentLength > 15000) {
-    return res.status(413).json({
-      error: "Request is too large.",
-    });
+    return Response.json(
+      {
+        error: "Request is too large.",
+      },
+      { status: 413 }
+    );
   }
 
-  const body = req.body || {};
+  let body;
+
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json(
+      {
+        error: "Invalid request.",
+      },
+      { status: 400 }
+    );
+  }
 
   // Honeypot anti-bot field.
   if (body.website) {
-    return res.status(400).json({
-      error: "Invalid submission.",
-    });
+    return Response.json(
+      {
+        error: "Invalid submission.",
+      },
+      { status: 400 }
+    );
   }
 
-  const productId = normalizeProductId(body.productId);
+  const productId = normalizeProductId(
+    body.productId
+  );
+
   const rating = Number(body.rating);
 
   const title = cleanString(
@@ -106,9 +117,12 @@ export default async function handler(req, res) {
   );
 
   if (!productId) {
-    return res.status(400).json({
-      error: "Invalid product.",
-    });
+    return Response.json(
+      {
+        error: "Invalid product.",
+      },
+      { status: 400 }
+    );
   }
 
   if (
@@ -116,38 +130,51 @@ export default async function handler(req, res) {
     rating < 1 ||
     rating > 5
   ) {
-    return res.status(400).json({
-      error: "Rating must be between 1 and 5.",
-    });
+    return Response.json(
+      {
+        error: "Rating must be between 1 and 5.",
+      },
+      { status: 400 }
+    );
   }
 
   if (!title) {
-    return res.status(400).json({
-      error: "Please enter a review title.",
-    });
+    return Response.json(
+      {
+        error: "Please enter a review title.",
+      },
+      { status: 400 }
+    );
   }
 
   if (!reviewBody) {
-    return res.status(400).json({
-      error: "Please enter your review.",
-    });
+    return Response.json(
+      {
+        error: "Please enter your review.",
+      },
+      { status: 400 }
+    );
   }
 
   if (!name) {
-    return res.status(400).json({
-      error: "Please enter your name.",
-    });
+    return Response.json(
+      {
+        error: "Please enter your name.",
+      },
+      { status: 400 }
+    );
   }
 
   if (!email || !isValidEmail(email)) {
-    return res.status(400).json({
-      error: "Please enter a valid email address.",
-    });
+    return Response.json(
+      {
+        error: "Please enter a valid email address.",
+      },
+      { status: 400 }
+    );
   }
 
   try {
-    // Judge.me expects api_token and shop_domain
-    // as query parameters, not inside the JSON body.
     const judgeMeUrl = new URL(JUDGEME_API_URL);
 
     judgeMeUrl.searchParams.set(
@@ -199,13 +226,16 @@ export default async function handler(req, res) {
         judgeMeResponse.status
       );
 
-      return res.status(502).json({
-        error:
-          "We couldn't submit your review right now. Please try again.",
-      });
+      return Response.json(
+        {
+          error:
+            "We couldn't submit your review right now. Please try again.",
+        },
+        { status: 502 }
+      );
     }
 
-    return res.status(200).json({
+    return Response.json({
       success: true,
       message:
         "Thank you! Your review has been submitted for moderation.",
@@ -217,9 +247,12 @@ export default async function handler(req, res) {
       error?.message || error
     );
 
-    return res.status(500).json({
-      error:
-        "We couldn't submit your review right now. Please try again.",
-    });
+    return Response.json(
+      {
+        error:
+          "We couldn't submit your review right now. Please try again.",
+      },
+      { status: 500 }
+    );
   }
 }
