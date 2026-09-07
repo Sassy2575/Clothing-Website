@@ -924,85 +924,236 @@ const ProductPage = () => {
   ========================================================== */
 
   useEffect(() => {
-    let cancelled = false;
+  let cancelled = false;
 
-    const fetchJudgeMeReviews = async () => {
-      if (!product?.id || !product?.handle) {
-        return;
+  const fetchJudgeMeReviews = async () => {
+    if (!product?.id || !product?.handle || !product?.title) {
+      return;
+    }
+
+    try {
+      setReviewsLoading(true);
+      setReviewsError("");
+
+      const shopDomain =
+        import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
+
+      const publicToken =
+        import.meta.env.VITE_JUDGEME_PUBLIC_TOKEN;
+
+      if (!shopDomain) {
+        throw new Error(
+          "Missing VITE_SHOPIFY_STORE_DOMAIN."
+        );
       }
 
-      try {
-        setReviewsLoading(true);
-        setReviewsError("");
+      if (!publicToken) {
+        throw new Error(
+          "Missing VITE_JUDGEME_PUBLIC_TOKEN."
+        );
+      }
 
-        // Shopify Storefront API returns product IDs as GIDs.
-        // The Vercel API endpoint converts this into Judge.me's
-        // internal product ID and fetches published reviews.
-        const externalId = String(product.id)
+      /*
+       * Judge.me public reviews endpoint.
+       *
+       * This is the same endpoint already working
+       * on the Home page.
+       */
+      const params = new URLSearchParams({
+        shop_domain: shopDomain,
+        public_token: publicToken,
+        page: String(reviewsPage),
+        per_page: "100",
+        json_request: "true",
+      });
+
+      const response = await fetch(
+        `https://judge.me/api/v1/widgets/all_reviews_page?${params.toString()}`,
+        {
+          cache: "no-store",
+        }
+      );
+
+      const result =
+        await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error ||
+            `Judge.me request failed (${response.status}).`
+        );
+      }
+
+      if (cancelled) return;
+
+      /*
+       * Judge.me returns all published reviews here.
+       *
+       * We filter them down to reviews belonging
+       * to the current Shopify product.
+       */
+      const allReviews = Array.isArray(
+        result?.reviews
+      )
+        ? result.reviews
+        : Array.isArray(
+            result?.widget?.reviews
+          )
+        ? result.widget.reviews
+        : [];
+
+      const currentProductTitle =
+        String(product.title)
+          .trim()
+          .toLowerCase();
+
+      const currentProductHandle =
+        String(product.handle)
+          .trim()
+          .toLowerCase();
+
+      const currentProductId =
+        String(product.id)
           .split("/")
           .pop();
 
-        const params = new URLSearchParams({
-          external_id: externalId,
-          handle: product.handle,
-          page: String(reviewsPage),
-          per_page: "5",
+      const productReviews =
+        allReviews.filter((review) => {
+          /*
+           * Product title
+           */
+          const reviewProductTitle =
+            String(
+              review?.product_title ||
+                review?.product?.title ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
+
+          /*
+           * Product handle
+           */
+          const reviewProductHandle =
+            String(
+              review?.product_handle ||
+                review?.product?.handle ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
+
+          /*
+           * Product ID
+           */
+          const reviewProductId =
+            String(
+              review?.product_id ||
+                review?.product?.id ||
+                review?.external_product_id ||
+                ""
+            )
+              .split("/")
+              .pop();
+
+          /*
+           * Match by whichever Judge.me field
+           * is available.
+           */
+          if (
+            reviewProductHandle &&
+            reviewProductHandle ===
+              currentProductHandle
+          ) {
+            return true;
+          }
+
+          if (
+            reviewProductId &&
+            reviewProductId ===
+              currentProductId
+          ) {
+            return true;
+          }
+
+          if (
+            reviewProductTitle &&
+            reviewProductTitle ===
+              currentProductTitle
+          ) {
+            return true;
+          }
+
+          return false;
         });
 
-        const response = await fetch(
-          `/api/judgeme-review?${params.toString()}`,
-          {
-            cache: "no-store",
-          }
+      /*
+       * The public endpoint may return more than
+       * five reviews, so paginate the filtered list
+       * ourselves.
+       */
+      const reviewsPerPage = 5;
+
+      const totalReviews =
+        productReviews.length;
+
+      const totalPages =
+        totalReviews > 0
+          ? Math.ceil(
+              totalReviews /
+                reviewsPerPage
+            )
+          : 0;
+
+      const startIndex =
+        (reviewsPage - 1) *
+        reviewsPerPage;
+
+      const paginatedReviews =
+        productReviews.slice(
+          startIndex,
+          startIndex + reviewsPerPage
         );
 
-        const result = await response.json().catch(() => ({}));
+      setJudgeMeReviews(
+        paginatedReviews
+      );
 
-        if (!response.ok) {
-          throw new Error(
-            result?.error ||
-              `Judge.me request failed (${response.status}).`
-          );
-        }
+      setReviewsTotalPages(
+        totalPages
+      );
+    } catch (error) {
+      console.error(
+        "ERROR LOADING JUDGE.ME REVIEWS:",
+        error
+      );
 
-        if (cancelled) return;
-
-        setJudgeMeReviews(
-          Array.isArray(result?.reviews)
-            ? result.reviews
-            : []
+      if (!cancelled) {
+        setJudgeMeReviews([]);
+        setReviewsTotalPages(0);
+        setReviewsError(
+          error?.message ||
+            "Unable to load customer reviews."
         );
-
-        setReviewsTotalPages(
-          Number(result?.total_pages) || 0
-        );
-      } catch (error) {
-        console.error(
-          "ERROR LOADING JUDGE.ME REVIEWS:",
-          error
-        );
-
-        if (!cancelled) {
-          setJudgeMeReviews([]);
-          setReviewsTotalPages(0);
-          setReviewsError(
-            error?.message ||
-              "Unable to load customer reviews."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setReviewsLoading(false);
-        }
       }
-    };
+    } finally {
+      if (!cancelled) {
+        setReviewsLoading(false);
+      }
+    }
+  };
 
-    fetchJudgeMeReviews();
+  fetchJudgeMeReviews();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [product?.id, product?.handle, reviewsPage]);
+  return () => {
+    cancelled = true;
+  };
+}, [
+  product?.id,
+  product?.handle,
+  product?.title,
+  reviewsPage,
+]);
 
 
   /* ==========================================================
