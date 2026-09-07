@@ -454,6 +454,7 @@ const ProductPage = () => {
   const [reviewsError, setReviewsError] = useState("");
   const [reviewsPage, setReviewsPage] = useState(1);
   const [reviewsTotalPages, setReviewsTotalPages] = useState(0);
+  const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0);
 
   const [reviewFormOpen, setReviewFormOpen] = useState(false);
   const [reviewRating, setReviewRating] = useState(0);
@@ -924,16 +925,12 @@ const ProductPage = () => {
   ========================================================== */
 
   useEffect(() => {
-  let cancelled = false;
+    let cancelled = false;
 
-  const fetchJudgeMeReviews = async () => {
-    if (!product?.id || !product?.handle || !product?.title) {
-      return;
-    }
-
-    try {
-      setReviewsLoading(true);
-      setReviewsError("");
+    const fetchJudgeMeReviews = async () => {
+      if (!product?.id || !product?.handle || !product?.title) {
+        return;
+      }
 
       const shopDomain =
         import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
@@ -941,101 +938,90 @@ const ProductPage = () => {
       const publicToken =
         import.meta.env.VITE_JUDGEME_PUBLIC_TOKEN;
 
-      if (!shopDomain) {
-        throw new Error(
-          "Missing VITE_SHOPIFY_STORE_DOMAIN."
-        );
-      }
-
-      if (!publicToken) {
-        throw new Error(
-          "Missing VITE_JUDGEME_PUBLIC_TOKEN."
-        );
-      }
-
-      /*
-       * Judge.me public reviews endpoint.
-       *
-       * This is the same endpoint already working
-       * on the Home page.
-       */
-      const params = new URLSearchParams({
-        shop_domain: shopDomain,
-        public_token: publicToken,
-        page: String(reviewsPage),
-        per_page: "100",
-        json_request: "true",
-      });
-
-      const response = await fetch(
-        `https://judge.me/api/v1/widgets/all_reviews_page?${params.toString()}`,
-        {
-          cache: "no-store",
+      if (!shopDomain || !publicToken) {
+        if (!cancelled) {
+          setJudgeMeReviews([]);
+          setReviewsTotalPages(0);
+          setReviewsError(
+            "Judge.me is not configured. Add VITE_JUDGEME_PUBLIC_TOKEN to your .env file."
+          );
+          setReviewsLoading(false);
         }
-      );
-
-      const result =
-        await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          result?.error ||
-            `Judge.me request failed (${response.status}).`
-        );
+        return;
       }
 
-      if (cancelled) return;
+      try {
+        setReviewsLoading(true);
+        setReviewsError("");
 
-      /*
-       * Judge.me returns all published reviews here.
-       *
-       * We filter them down to reviews belonging
-       * to the current Shopify product.
-       */
-      const allReviews = Array.isArray(
-        result?.reviews
-      )
-        ? result.reviews
-        : Array.isArray(
-            result?.widget?.reviews
-          )
-        ? result.widget.reviews
-        : [];
+        /*
+         * IMPORTANT:
+         * Home.jsx already receives the published Judge.me reviews
+         * successfully through all_reviews_page.
+         *
+         * We use that same working endpoint here and filter the
+         * response to the current Shopify product.
+         *
+         * We request the first 100 reviews so a product review is
+         * not missed simply because it is not one of the homepage's
+         * six displayed reviews.
+         */
+        const params = new URLSearchParams({
+          shop_domain: shopDomain,
+          api_token: publicToken,
+          page: "1",
+          per_page: "100",
+          json_request: "true",
+          _ts: String(Date.now()),
+        });
 
-      const currentProductTitle =
-        String(product.title)
+        const response = await fetch(
+          `https://judge.me/api/v1/widgets/all_reviews_page?${params.toString()}`,
+          {
+            cache: "no-store",
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Judge.me request failed (${response.status}).`
+          );
+        }
+
+        const result = await response.json();
+
+        if (cancelled) return;
+
+        const allReviews = Array.isArray(result?.reviews)
+          ? result.reviews
+          : [];
+
+        const currentTitle = String(product.title)
           .trim()
           .toLowerCase();
 
-      const currentProductHandle =
-        String(product.handle)
+        const currentHandle = String(product.handle)
           .trim()
           .toLowerCase();
 
-      const currentProductId =
-        String(product.id)
+        const currentProductId = String(product.id)
           .split("/")
           .pop();
 
-      const productReviews =
-        allReviews.filter((review) => {
-          /*
-           * Product title
-           */
-          const reviewProductTitle =
-            String(
-              review?.product_title ||
-                review?.product?.title ||
-                ""
+        /*
+         * Judge.me's all_reviews_page response contains product_title.
+         * We also check handle/product IDs when those fields are
+         * available, so the matching remains robust.
+         */
+        const productReviews = allReviews
+          .filter((review) => {
+            const reviewTitle = String(
+              review?.product_title || ""
             )
               .trim()
               .toLowerCase();
 
-          /*
-           * Product handle
-           */
-          const reviewProductHandle =
-            String(
+            const reviewHandle = String(
               review?.product_handle ||
                 review?.product?.handle ||
                 ""
@@ -1043,117 +1029,89 @@ const ProductPage = () => {
               .trim()
               .toLowerCase();
 
-          /*
-           * Product ID
-           */
-          const reviewProductId =
-            String(
+            const reviewProductId = String(
               review?.product_id ||
-                review?.product?.id ||
                 review?.external_product_id ||
+                review?.product?.id ||
                 ""
             )
               .split("/")
               .pop();
 
-          /*
-           * Match by whichever Judge.me field
-           * is available.
-           */
-          if (
-            reviewProductHandle &&
-            reviewProductHandle ===
-              currentProductHandle
-          ) {
-            return true;
-          }
+            return (
+              reviewTitle === currentTitle ||
+              (reviewHandle &&
+                reviewHandle === currentHandle) ||
+              (reviewProductId &&
+                reviewProductId === currentProductId)
+            );
+          })
+          .sort(
+            (a, b) =>
+              new Date(b?.created_at || 0) -
+              new Date(a?.created_at || 0)
+          );
 
-          if (
-            reviewProductId &&
-            reviewProductId ===
-              currentProductId
-          ) {
-            return true;
-          }
+        const reviewsPerPage = 5;
 
-          if (
-            reviewProductTitle &&
-            reviewProductTitle ===
-              currentProductTitle
-          ) {
-            return true;
-          }
+        const totalPages =
+          productReviews.length > 0
+            ? Math.ceil(
+                productReviews.length /
+                  reviewsPerPage
+              )
+            : 0;
 
-          return false;
-        });
-
-      /*
-       * The public endpoint may return more than
-       * five reviews, so paginate the filtered list
-       * ourselves.
-       */
-      const reviewsPerPage = 5;
-
-      const totalReviews =
-        productReviews.length;
-
-      const totalPages =
-        totalReviews > 0
-          ? Math.ceil(
-              totalReviews /
-                reviewsPerPage
-            )
-          : 0;
-
-      const startIndex =
-        (reviewsPage - 1) *
-        reviewsPerPage;
-
-      const paginatedReviews =
-        productReviews.slice(
-          startIndex,
-          startIndex + reviewsPerPage
+        const safePage = Math.min(
+          Math.max(reviewsPage, 1),
+          Math.max(totalPages, 1)
         );
 
-      setJudgeMeReviews(
-        paginatedReviews
-      );
+        const startIndex =
+          (safePage - 1) *
+          reviewsPerPage;
 
-      setReviewsTotalPages(
-        totalPages
-      );
-    } catch (error) {
-      console.error(
-        "ERROR LOADING JUDGE.ME REVIEWS:",
-        error
-      );
+        const pageReviews =
+          productReviews.slice(
+            startIndex,
+            startIndex + reviewsPerPage
+          );
 
-      if (!cancelled) {
-        setJudgeMeReviews([]);
-        setReviewsTotalPages(0);
-        setReviewsError(
-          error?.message ||
-            "Unable to load customer reviews."
+        setJudgeMeReviews(pageReviews);
+        setReviewsTotalPages(totalPages);
+      } catch (error) {
+        console.error(
+          "ERROR LOADING JUDGE.ME PRODUCT REVIEWS:",
+          error
         );
-      }
-    } finally {
-      if (!cancelled) {
-        setReviewsLoading(false);
-      }
-    }
-  };
 
-  fetchJudgeMeReviews();
+        if (!cancelled) {
+          setJudgeMeReviews([]);
+          setReviewsTotalPages(0);
+          setReviewsError(
+            error?.message ||
+              "Unable to load customer reviews."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setReviewsLoading(false);
+        }
+      }
+    };
 
-  return () => {
-    cancelled = true;
-  };
-}, [
-  product?.id,
-  product?.handle,
-  product?.title,
-  reviewsPage,
-]);
+    fetchJudgeMeReviews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    product?.id,
+    product?.handle,
+    product?.title,
+    reviewsPage,
+    reviewsRefreshKey,
+  ]);
 
 
   /* ==========================================================
@@ -1227,6 +1185,7 @@ const ProductPage = () => {
       setReviewSubmitSuccess(
         result?.message || "Thank you! Your review has been submitted."
       );
+      setReviewsRefreshKey((key) => key + 1);
       setReviewTitle("");
       setReviewBody("");
       setReviewName("");
