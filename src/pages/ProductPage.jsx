@@ -2235,6 +2235,17 @@ Can I customize this?
 
           <div className="max-w-4xl mx-auto bg-white p-6 md:p-10 border border-gray-200">
 
+            {/* WRITE REVIEW — ALWAYS ABOVE ALL REVIEWS */}
+            <div className="flex justify-end mb-8 pb-6 border-b border-gray-200">
+              <button
+                type="button"
+                onClick={openReviewForm}
+                className="inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
+              >
+                Write the Review
+              </button>
+            </div>
+
             {reviewsLoading && (
               <div className="flex items-center justify-center gap-3 py-12 text-gray-500">
                 <Loader2 className="animate-spin" size={20} />
@@ -2251,13 +2262,6 @@ Can I customize this?
                 <p className="text-sm text-gray-500">
                   {reviewsError}
                 </p>
-                <button
-                  type="button"
-                  onClick={openReviewForm}
-                  className="mt-5 inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
-                >
-                  Write the Review
-                </button>
               </div>
             )}
 
@@ -2272,13 +2276,6 @@ Can I customize this?
                   <p className="text-sm text-gray-500">
                     No reviews yet. Be the first to review this product.
                   </p>
-                  <button
-                    type="button"
-                    onClick={openReviewForm}
-                    className="mt-5 inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
-                  >
-                    Write the Review
-                  </button>
                 </div>
               )}
 
