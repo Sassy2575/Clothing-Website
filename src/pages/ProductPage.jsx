@@ -2141,6 +2141,13 @@ Can I customize this?
                 <p className="text-sm text-gray-500">
                   {reviewsError}
                 </p>
+                <button
+                  type="button"
+                  onClick={openReviewForm}
+                  className="mt-5 inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
+                >
+                  Write the Review
+                </button>
               </div>
             )}
 
