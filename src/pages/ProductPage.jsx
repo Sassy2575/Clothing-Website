@@ -931,54 +931,39 @@ const ProductPage = () => {
         return;
       }
 
-      const publicToken =
-        import.meta.env.VITE_JUDGEME_PUBLIC_TOKEN;
-      const shopDomain =
-        import.meta.env.VITE_SHOPIFY_STORE_DOMAIN;
-
-      if (!publicToken || !shopDomain) {
-        if (!cancelled) {
-          setJudgeMeReviews([]);
-          setReviewsTotalPages(0);
-          setReviewsError(
-            "Judge.me is not configured. Add VITE_JUDGEME_PUBLIC_TOKEN to your .env file."
-          );
-          setReviewsLoading(false);
-        }
-        return;
-      }
-
       try {
         setReviewsLoading(true);
         setReviewsError("");
 
         // Shopify Storefront API returns product IDs as GIDs.
-        // Judge.me accepts the numeric Shopify product ID as external_id.
+        // The Vercel API endpoint converts this into Judge.me's
+        // internal product ID and fetches published reviews.
         const externalId = String(product.id)
           .split("/")
           .pop();
 
         const params = new URLSearchParams({
-          shop_domain: shopDomain,
-          api_token: publicToken,
-          handle: product.handle,
           external_id: externalId,
+          handle: product.handle,
           page: String(reviewsPage),
           per_page: "5",
-          json_request: "true",
         });
 
         const response = await fetch(
-          `https://judge.me/api/v1/widgets/product_review?${params.toString()}`
+          `/api/judgeme-review?${params.toString()}`,
+          {
+            cache: "no-store",
+          }
         );
+
+        const result = await response.json().catch(() => ({}));
 
         if (!response.ok) {
           throw new Error(
-            `Judge.me request failed (${response.status}).`
+            result?.error ||
+              `Judge.me request failed (${response.status}).`
           );
         }
-
-        const result = await response.json();
 
         if (cancelled) return;
 
@@ -987,6 +972,7 @@ const ProductPage = () => {
             ? result.reviews
             : []
         );
+
         setReviewsTotalPages(
           Number(result?.total_pages) || 0
         );
@@ -1017,6 +1003,7 @@ const ProductPage = () => {
       cancelled = true;
     };
   }, [product?.id, product?.handle, reviewsPage]);
+
 
   /* ==========================================================
      REVIEW SUBMISSION
@@ -2173,7 +2160,7 @@ Can I customize this?
                     onClick={openReviewForm}
                     className="mt-5 inline-flex items-center justify-center border border-gray-900 px-6 py-3 text-sm font-medium text-gray-900 transition hover:bg-gray-900 hover:text-white"
                   >
-                    Write the First Review
+                    Write the Review
                   </button>
                 </div>
               )}
@@ -2184,7 +2171,7 @@ Can I customize this?
                 <div className="space-y-8">
                   {judgeMeReviews.map((review) => (
                     <article
-                      key={review.uuid}
+                      key={review.uuid || review.id}
                       className="border-b border-gray-200 pb-8 last:border-b-0 last:pb-0"
                     >
                       <div className="flex items-start justify-between gap-4">
