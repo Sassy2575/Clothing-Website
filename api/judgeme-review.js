@@ -4,61 +4,133 @@ const JUDGEME_API_BASE = "https://api.judge.me/api/v1";
 const JUDGEME_REVIEWS_URL = `${JUDGEME_API_BASE}/reviews`;
 const JUDGEME_PRODUCTS_URL = `${JUDGEME_API_BASE}/products/-1`;
 
-function getConfig() {
-  const shopDomain = process.env.JUDGEME_SHOP_DOMAIN;
-  const privateToken = process.env.JUDGEME_PRIVATE_TOKEN;
-
-  if (!shopDomain || !privateToken) {
-    throw new Error(
-      "Judge.me server configuration is missing."
-    );
-  }
-
-  return {
-    shopDomain,
-    privateToken,
-  };
+function getEnv(name) {
+  return String(process.env[name] || "").trim();
 }
 
 function normalizeProductId(value) {
-  if (!value) return "";
-
-  return String(value)
+  return String(value || "")
     .trim()
     .split("/")
     .pop();
 }
 
-async function lookupProduct({
-  shopDomain,
-  privateToken,
-  externalId,
-  handle,
-}) {
+async function lookupProduct({ shopDomain, privateToken, productId, handle }) {
+  const headers = {
+    Accept: "application/json",
+  };
+
   const candidates = [];
 
-  if (externalId) {
-    candidates.push({
-      external_id: externalId,
-    });
+  if (productId) {
+    candidates.push(
+      `${JUDGEME_PRODUCTS_URL}?shop_domain=${encodeURIComponent(
+        shopDomain
+      )}&api_token=${encodeURIComponent(
+        privateToken
+      )}&external_id=${encodeURIComponent(productId)}`
+    );
   }
 
   if (handle) {
-    candidates.push({
-      handle,
+    candidates.push(
+      `${JUDGEME_PRODUCTS_URL}?shop_domain=${encodeURIComponent(
+        shopDomain
+      )}&api_token=${encodeURIComponent(
+        privateToken
+      )}&handle=${encodeURIComponent(handle)}`
+    );
+  }
+
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers,
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const data = await response.json();
+
+      const product =
+        data?.product ||
+        (Array.isArray(data?.products) ? data.products[0] : null) ||
+        (data?.id ? data : null);
+
+      if (product?.id) {
+        return product;
+      }
+    } catch {
+      // Try the next lookup method.
+    }
+  }
+
+  return null;
+}
+
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  const shopDomain = getEnv("JUDGEME_SHOP_DOMAIN");
+  const privateToken = getEnv("JUDGEME_PRIVATE_TOKEN");
+
+  if (!shopDomain || !privateToken) {
+    return res.status(500).json({
+      error:
+        "Judge.me is not configured. Add JUDGEME_SHOP_DOMAIN and JUDGEME_PRIVATE_TOKEN to Vercel environment variables.",
     });
   }
 
-  for (const candidate of candidates) {
-    const params = new URLSearchParams({
-      shop_domain: shopDomain,
-      api_token: privateToken,
-      ...candidate,
-    });
-
+  // ---------------------------------------------------------
+  // GET REVIEWS
+  // ---------------------------------------------------------
+  if (req.method === "GET") {
     try {
+      const {
+        productId = "",
+        handle = "",
+        page = "1",
+        perPage = "100",
+      } = req.query || {};
+
+      const normalizedProductId = normalizeProductId(productId);
+
+      const judgeMeProduct = await lookupProduct({
+        shopDomain,
+        privateToken,
+        productId: normalizedProductId,
+        handle,
+      });
+
+      if (!judgeMeProduct?.id) {
+        return res.status(200).json({
+          reviews: [],
+          total: 0,
+          page: Number(page) || 1,
+          per_page: Number(perPage) || 100,
+        });
+      }
+
+      const params = new URLSearchParams({
+        shop_domain: shopDomain,
+        api_token: privateToken,
+        product_id: String(judgeMeProduct.id),
+        published: "true",
+        page: String(page),
+        per_page: String(perPage),
+      });
+
       const response = await fetch(
-        `${JUDGEME_PRODUCTS_URL}?${params.toString()}`,
+        `${JUDGEME_REVIEWS_URL}?${params.toString()}`,
         {
           method: "GET",
           headers: {
@@ -67,340 +139,145 @@ async function lookupProduct({
         }
       );
 
-      const result = await response.json().catch(() => ({}));
+      const data = await response.json();
 
       if (!response.ok) {
-        continue;
+        return res.status(response.status).json({
+          error:
+            data?.error ||
+            data?.message ||
+            "Unable to load Judge.me reviews.",
+        });
       }
 
-      const judgeMeProductId =
-        result?.product?.id ??
-        result?.id ??
-        result?.product?.product?.id ??
-        null;
-
-      if (judgeMeProductId) {
-        return String(judgeMeProductId);
-      }
+      return res.status(200).json(data);
     } catch (error) {
-      console.error(
-        "Judge.me product lookup failed:",
-        error
-      );
+      console.error("ERROR LOADING JUDGE.ME REVIEWS:", error);
+
+      return res.status(500).json({
+        error: error?.message || "Unable to load customer reviews.",
+      });
     }
   }
 
-  return null;
-}
+  // ---------------------------------------------------------
+  // POST REVIEW
+  // ---------------------------------------------------------
+  if (req.method === "POST") {
+    try {
+      const {
+        productId,
+        rating,
+        title,
+        body: reviewBody,
+        name,
+        email,
+        anonymous,
+        website,
+      } = req.body || {};
 
-async function getReviews(req, res) {
-  try {
-    const {
-      shopDomain,
-      privateToken,
-    } = getConfig();
-
-    const {
-      external_id,
-      handle,
-      page = "1",
-      per_page = "5",
-    } = req.query || {};
-
-    const normalizedExternalId =
-      normalizeProductId(external_id);
-
-    const normalizedPage =
-      Math.max(Number(page) || 1, 1);
-
-    const normalizedPerPage = Math.min(
-      Math.max(Number(per_page) || 5, 1),
-      100
-    );
-
-    /*
-     * First try to find Judge.me's internal product ID.
-     *
-     * If Judge.me cannot find the product, return an empty
-     * review list instead of returning a hard error.
-     */
-    const judgeMeProductId =
-      await lookupProduct({
-        shopDomain,
-        privateToken,
-        externalId: normalizedExternalId,
-        handle,
-      });
-
-    if (!judgeMeProductId) {
-      res.setHeader(
-        "Cache-Control",
-        "no-store, no-cache, must-revalidate"
-      );
-
-      return res.status(200).json({
-        reviews: [],
-        total_reviews: 0,
-        total_pages: 0,
-        current_page: normalizedPage,
-        per_page: normalizedPerPage,
-      });
-    }
-
-    const params = new URLSearchParams({
-      shop_domain: shopDomain,
-      api_token: privateToken,
-      product_id: judgeMeProductId,
-      published: "true",
-      page: String(normalizedPage),
-      per_page: String(normalizedPerPage),
-    });
-
-    const response = await fetch(
-      `${JUDGEME_REVIEWS_URL}?${params.toString()}`,
-      {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
+      // Honeypot spam protection
+      if (String(website || "").trim()) {
+        return res.status(400).json({
+          error: "Unable to submit review.",
+        });
       }
-    );
 
-    const result = await response.json().catch(() => ({}));
+      const numericProductId = normalizeProductId(productId);
 
-    if (!response.ok) {
-      console.error(
-        "Judge.me reviews GET failed:",
-        response.status,
-        result
-      );
+      // Shopify sends:
+      // gid://shopify/Product/123456789
+      //
+      // Judge.me expects:
+      // 123456789
+      if (!/^\d+$/.test(numericProductId)) {
+        return res.status(400).json({
+          error: "Product ID must be numeric.",
+        });
+      }
 
-      return res.status(502).json({
-        error:
-          result?.error ||
-          result?.message ||
-          `Judge.me reviews request failed (${response.status}).`,
-      });
-    }
+      const numericRating = Number(rating);
 
-    const reviews =
-      Array.isArray(result?.reviews)
-        ? result.reviews
-        : Array.isArray(result?.data?.reviews)
-        ? result.data.reviews
-        : [];
+      if (
+        !Number.isInteger(numericRating) ||
+        numericRating < 1 ||
+        numericRating > 5
+      ) {
+        return res.status(400).json({
+          error: "Rating must be between 1 and 5.",
+        });
+      }
 
-    res.setHeader(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate"
-    );
+      if (!String(name || "").trim()) {
+        return res.status(400).json({
+          error: "Please enter your name.",
+        });
+      }
 
-    return res.status(200).json({
-      reviews,
-      total_reviews:
-        Number(result?.total_reviews) ||
-        Number(result?.total) ||
-        reviews.length,
-      total_pages:
-        Number(result?.total_pages) ||
-        0,
-      current_page: normalizedPage,
-      per_page: normalizedPerPage,
-    });
-  } catch (error) {
-    console.error(
-      "Judge.me reviews GET error:",
-      error
-    );
+      if (!String(email || "").trim()) {
+        return res.status(400).json({
+          error: "Please enter your email.",
+        });
+      }
 
-    return res.status(500).json({
-      error:
-        error?.message ||
-        "Unable to load customer reviews.",
-    });
-  }
-}
+      if (!String(reviewBody || "").trim()) {
+        return res.status(400).json({
+          error: "Please write your review.",
+        });
+      }
 
-async function createReview(req, res) {
-  try {
-    const {
-      shopDomain,
-      privateToken,
-    } = getConfig();
+      const payload = {
+        shop_domain: shopDomain,
+        platform: "shopify",
 
-    const body = req.body || {};
+        // IMPORTANT:
+        // Judge.me expects the Shopify product's numeric
+        // external ID here, NOT the Shopify GID.
+        id: numericProductId,
 
-    const {
-      productId,
-      rating,
-      title,
-      body: reviewBody,
-      name,
-      email,
-      anonymous,
-      website,
-    } = body;
+        name: String(name).trim(),
+        email: String(email).trim(),
+        rating: numericRating,
+        title: String(title || "").trim(),
+        body: String(reviewBody).trim(),
+      };
 
-    /*
-     * Honeypot spam protection.
-     */
-    if (website) {
-      return res.status(400).json({
-        error: "Invalid submission.",
-      });
-    }
-
-    if (!productId) {
-      return res.status(400).json({
-        error: "Product information is missing.",
-      });
-    }
-
-    const numericRating = Number(rating);
-
-    if (
-      !Number.isFinite(numericRating) ||
-      numericRating < 1 ||
-      numericRating > 5
-    ) {
-      return res.status(400).json({
-        error: "Please select a rating.",
-      });
-    }
-
-    if (
-      !title ||
-      !String(title).trim()
-    ) {
-      return res.status(400).json({
-        error: "Please enter a review title.",
-      });
-    }
-
-    if (
-      !reviewBody ||
-      !String(reviewBody).trim()
-    ) {
-      return res.status(400).json({
-        error: "Please enter your review.",
-      });
-    }
-
-    if (
-      !name ||
-      !String(name).trim()
-    ) {
-      return res.status(400).json({
-        error: "Please enter your name.",
-      });
-    }
-
-    if (
-      !email ||
-      !String(email).trim()
-    ) {
-      return res.status(400).json({
-        error: "Please enter your email.",
-      });
-    }
-
-    /*
-     * Judge.me API-created reviews use the Shopify external
-     * product ID through the `id` field.
-     */
-    const payload = {
-      shop_domain: shopDomain,
-      platform: "shopify",
-      id: productId,
-      name: String(name).trim(),
-      email: String(email).trim(),
-      rating: numericRating,
-      title: String(title).trim(),
-      body: String(reviewBody).trim(),
-    };
-
-    /*
-     * Keep the API submission simple.
-     * Judge.me controls moderation/publishing.
-     */
-    const response = await fetch(
-      JUDGEME_REVIEWS_URL,
-      {
+      const response = await fetch(JUDGEME_REVIEWS_URL, {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error("JUDGE.ME REVIEW SUBMISSION ERROR:", {
+          status: response.status,
+          data,
+        });
+
+        return res.status(response.status).json({
+          error:
+            data?.error ||
+            data?.message ||
+            "Unable to submit review to Judge.me.",
+        });
       }
-    );
 
-    const result = await response.json().catch(() => ({}));
+      return res.status(200).json({
+        success: true,
+        review: data,
+      });
+    } catch (error) {
+      console.error("ERROR SUBMITTING JUDGE.ME REVIEW:", error);
 
-    if (!response.ok) {
-      console.error(
-        "Judge.me review submission failed:",
-        response.status,
-        result
-      );
-
-      return res.status(502).json({
-        error:
-          result?.error ||
-          result?.message ||
-          `Judge.me submission failed (${response.status}).`,
+      return res.status(500).json({
+        error: error?.message || "Unable to submit review.",
       });
     }
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "Thank you! Your review has been submitted.",
-      review: result?.review || result,
-    });
-  } catch (error) {
-    console.error(
-      "Judge.me review POST error:",
-      error
-    );
-
-    return res.status(500).json({
-      error:
-        error?.message ||
-        "Unable to submit your review.",
-    });
-  }
-}
-
-export default async function handler(req, res) {
-  /*
-   * CORS / response headers
-   */
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, OPTIONS"
-  );
-
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method === "GET") {
-    return getReviews(req, res);
-  }
-
-  if (req.method === "POST") {
-    return createReview(req, res);
   }
 
   return res.status(405).json({

@@ -2236,7 +2236,7 @@ Can I customize this?
           <div className="max-w-4xl mx-auto bg-white p-6 md:p-10 border border-gray-200">
 
             {/* WRITE REVIEW — ALWAYS ABOVE ALL REVIEWS */}
-            <div className="flex justify-end mb-8 pb-6 border-b border-gray-200">
+            <div className="flex justify-center mb-8 pb-6 border-b border-gray-200">
               <button
                 type="button"
                 onClick={openReviewForm}
