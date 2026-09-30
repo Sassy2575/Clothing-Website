@@ -132,6 +132,79 @@ export async function getShopifyProductByHandle(handle) {
         productType
         vendor
 
+        category {
+          id
+          name
+        }
+
+        metafields(identifiers: [
+          { namespace: "shopify", key: "age-group" },
+          { namespace: "shopify", key: "back-design" },
+          { namespace: "shopify", key: "bra-closure-type" },
+          { namespace: "shopify", key: "bra-coverage" },
+          { namespace: "shopify", key: "bra-features" },
+          { namespace: "shopify", key: "bra-length-type" },
+          { namespace: "shopify", key: "bra-padding-type" },
+          { namespace: "shopify", key: "bra-strap-type" },
+          { namespace: "shopify", key: "bra-style" },
+          { namespace: "shopify", key: "bra-support-level" },
+          { namespace: "shopify", key: "care-instructions" },
+          { namespace: "shopify", key: "clothing-features" },
+          { namespace: "shopify", key: "color-pattern" },
+          { namespace: "shopify", key: "cup-size" },
+          { namespace: "shopify", key: "dress-occasion" },
+          { namespace: "shopify", key: "dress-style" },
+          { namespace: "shopify", key: "fabric" },
+          { namespace: "shopify", key: "fit" },
+          { namespace: "shopify", key: "garment-back-style" },
+          { namespace: "shopify", key: "hemline-style" },
+          { namespace: "shopify", key: "hood-design" },
+          { namespace: "shopify", key: "hood-type" },
+          { namespace: "shopify", key: "integrated-bottom-type" },
+          { namespace: "shopify", key: "jewelry-material" },
+          { namespace: "shopify", key: "neckline" },
+          { namespace: "shopify", key: "pattern" },
+          { namespace: "shopify", key: "pant-cuff-style" },
+          { namespace: "shopify", key: "pants-length-type" },
+          { namespace: "shopify", key: "pocket-closure-type" },
+          { namespace: "shopify", key: "pocket-type" },
+          { namespace: "shopify", key: "size" },
+          { namespace: "shopify", key: "size-type" },
+          { namespace: "shopify", key: "skirt-dress-length-type" },
+          { namespace: "shopify", key: "sleeve-length-type" },
+          { namespace: "shopify", key: "target-gender" },
+          { namespace: "shopify", key: "top-length-type" },
+          { namespace: "shopify", key: "waist-rise" },
+          { namespace: "shopify", key: "zipper-opening-length" },
+          { namespace: "shopify", key: "zipper-style" }
+        ]) {
+          namespace
+          key
+          type
+          list
+          value
+          reference {
+            __typename
+            ... on Metaobject {
+              fields {
+                key
+                value
+              }
+            }
+          }
+          references(first: 50) {
+            nodes {
+              __typename
+              ... on Metaobject {
+                fields {
+                  key
+                  value
+                }
+              }
+            }
+          }
+        }
+
         featuredImage {
           url
           altText

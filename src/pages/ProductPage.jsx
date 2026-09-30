@@ -409,6 +409,141 @@ function formatPrice(
 }
 
 /* ============================================================
+   SHOPIFY CATEGORY / PRODUCT METADATA
+
+   Shopify can give different products different category
+   metafields. We ask for a broad set of Shopify's standard
+   taxonomy attributes and only render the ones that actually
+   have a value on the current product.
+============================================================ */
+
+const METADATA_LABELS = {
+  "age-group": "Age group",
+  "back-design": "Back design",
+  "bra-closure-type": "Bra closure type",
+  "bra-coverage": "Bra coverage",
+  "bra-features": "Bra features",
+  "bra-length-type": "Bra length type",
+  "bra-padding-type": "Bra padding type",
+  "bra-strap-type": "Bra strap type",
+  "bra-style": "Bra style",
+  "bra-support-level": "Bra support level",
+  "care-instructions": "Care instructions",
+  "clothing-features": "Clothing features",
+  "color-pattern": "Color",
+  "cup-size": "Cup size",
+  "dress-occasion": "Dress occasion",
+  "dress-style": "Dress style",
+  "fabric": "Fabric",
+  "fit": "Fit",
+  "garment-back-style": "Garment back style",
+  "hemline-style": "Hemline style",
+  "hood-design": "Hood design",
+  "hood-type": "Hood type",
+  "integrated-bottom-type": "Integrated bottom type",
+  "jewelry-material": "Jewelry material",
+  "neckline": "Neckline",
+  "pattern": "Pattern",
+  "pant-cuff-style": "Pant cuff style",
+  "pants-length-type": "Pants length type",
+  "pocket-closure-type": "Pocket closure type",
+  "pocket-type": "Pocket type",
+  "size": "Size",
+  "size-type": "Size type",
+  "skirt-dress-length-type": "Skirt/Dress length type",
+  "sleeve-length-type": "Sleeve length type",
+  "target-gender": "Target gender",
+  "top-length-type": "Top length type",
+  "waist-rise": "Waist rise",
+  "zipper-opening-length": "Zipper opening length",
+  "zipper-style": "Zipper style",
+};
+
+function parseMetadataValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed !== null && parsed !== undefined) return [parsed];
+  } catch {
+    // Normal text values are not JSON. Keep them as-is.
+  }
+
+  return [value];
+}
+
+function getMetaobjectLabel(reference) {
+  const fields = reference?.fields || [];
+
+  const preferredKeys = [
+    "label",
+    "name",
+    "title",
+    "value",
+  ];
+
+  for (const key of preferredKeys) {
+    const field = fields.find((item) => item?.key === key);
+    if (field?.value) {
+      const values = parseMetadataValue(field.value);
+      const first = values.find(
+        (item) => item !== null && item !== undefined && String(item).trim() !== ""
+      );
+      if (first !== undefined) return String(first);
+    }
+  }
+
+  return "";
+}
+
+function getMetadataDisplayValues(metafield) {
+  if (!metafield) return [];
+
+  const referenceValues = [
+    ...(metafield.reference ? [metafield.reference] : []),
+    ...(metafield.references?.nodes || []),
+  ]
+    .map(getMetaobjectLabel)
+    .filter(Boolean);
+
+  if (referenceValues.length > 0) {
+    return [...new Set(referenceValues)];
+  }
+
+  return parseMetadataValue(metafield.value)
+    .flatMap((item) => {
+      if (item === null || item === undefined) return [];
+      const stringValue = String(item).trim();
+
+      // Do not expose raw Shopify GIDs if the storefront could not
+      // resolve the referenced taxonomy/metaobject value.
+      if (stringValue.startsWith("gid://shopify/")) return [];
+
+      return stringValue ? [stringValue] : [];
+    })
+    .filter(Boolean);
+}
+
+function buildProductMetadata(product) {
+  const metafields = product?.metafields || [];
+
+  return metafields
+    .map((metafield) => ({
+      ...metafield,
+      label:
+        METADATA_LABELS[metafield?.key] ||
+        String(metafield?.key || "")
+          .replace(/[-_]/g, " ")
+          .replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      values: getMetadataDisplayValues(metafield),
+    }))
+    .filter((item) => item.values.length > 0);
+}
+
+/* ============================================================
    PRODUCT PAGE
 ============================================================ */
 
@@ -806,6 +941,11 @@ const ProductPage = () => {
     compareAtPrice > 0 &&
     compareAtPrice >
       productPrice;
+
+  const productMetadata = useMemo(
+    () => buildProductMetadata(product),
+    [product]
+  );
 
   /* ==========================================================
      DESCRIPTION
@@ -1772,7 +1912,7 @@ Can I customize this?
 
           {(product.descriptionHtml || product.description) && (
             <div
-              className="text-gray-600 text-sm leading-relaxed mb-8
+              className="text-gray-600 text-base leading-relaxed mb-8
                 [&_p]:mb-4
                 [&_p:last-child]:mb-0
                 [&_br]:content-['']
@@ -2172,37 +2312,61 @@ Can I customize this?
           </div>
 
           {/* ==================================================
-              PRODUCT INFORMATION
+              PRODUCT INFORMATION + DYNAMIC SHOPIFY METADATA
+
+              Only metadata that is actually populated in Shopify
+              is displayed. Different categories/products can
+              therefore show different rows automatically.
           ================================================== */}
 
-          <div className="border-t border-gray-100 pt-6 space-y-2 text-xs text-gray-500">
+          <div className="border-t border-gray-100 pt-6 space-y-4 text-base leading-6 text-gray-500">
+
+            {productMetadata.length > 0 && (
+              <div className="space-y-4">
+                {productMetadata.map((item) => (
+                  <div
+                    key={`${item.namespace}-${item.key}`}
+                    className="flex items-start justify-between gap-8"
+                  >
+                    <span className="font-semibold text-gray-700 shrink-0">
+                      {item.label}:
+                    </span>
+
+                    <div className="flex flex-wrap justify-end gap-x-2 text-right">
+                      {item.values.map((value, index) => (
+                        <span
+                          key={`${item.key}-${index}-${value}`}
+                          className="inline-block"
+                        >
+                          {value}
+                          {index < item.values.length - 1 ? "," : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {product.productType && (
-              <p>
-                <span className="font-semibold text-gray-700">
+              <div className="flex items-start justify-between gap-8">
+                <span className="font-semibold text-gray-700 shrink-0">
                   Type:
-                </span>{" "}
-                {product.productType}
-              </p>
+                </span>
+                <span className="text-right">{product.productType}</span>
+              </div>
             )}
 
-            {product.vendor && (
-              <p>
-                <span className="font-semibold text-gray-700">
-                  Brand:
-                </span>{" "}
-                {product.vendor}
-              </p>
-            )}
-
-            <p>
-              <span className="font-semibold text-gray-700">
+            <div className="flex items-start justify-between gap-8">
+              <span className="font-semibold text-gray-700 shrink-0">
                 Availability:
-              </span>{" "}
-              {selectedVariant?.availableForSale
-                ? "In stock"
-                : "Sold out"}
-            </p>
+              </span>
+              <span className="text-right">
+                {selectedVariant?.availableForSale
+                  ? "In stock"
+                  : "Sold out"}
+              </span>
+            </div>
 
           </div>
 
