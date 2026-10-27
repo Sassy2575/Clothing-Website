@@ -1903,41 +1903,6 @@ Can I customize this?
 
           </div>
 
-          {/* --------------------------------------------------
-              PRODUCT DESCRIPTION
-
-              whitespace-pre-line is IMPORTANT.
-              It preserves Shopify line breaks.
-          -------------------------------------------------- */}
-
-          {(product.descriptionHtml || product.description) && (
-            <div
-              className="text-gray-600 text-base leading-relaxed mb-8
-                [&_p]:mb-4
-                [&_p:last-child]:mb-0
-                [&_br]:content-['']
-                [&_strong]:font-semibold
-                [&_em]:italic
-                [&_ul]:list-disc
-                [&_ul]:pl-5
-                [&_ol]:list-decimal
-                [&_ol]:pl-5
-                [&_li]:mb-1"
-            >
-              {product.descriptionHtml ? (
-                <div
-                  dangerouslySetInnerHTML={{
-                    __html: product.descriptionHtml,
-                  }}
-                />
-              ) : (
-                <div className="whitespace-pre-line">
-                  {product.description}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* ==================================================
               SIZE SELECTOR
           ================================================== */}
@@ -2308,6 +2273,37 @@ Can I customize this?
               )}
 
             </button>
+
+            {/* --------------------------------------------------
+                PRODUCT DESCRIPTION — BELOW ADD TO CART
+            -------------------------------------------------- */}
+            {(product.descriptionHtml || product.description) && (
+              <div
+                className="mt-6 mb-8 text-gray-600 text-base leading-relaxed
+                  [&_p]:mb-4
+                  [&_p:last-child]:mb-0
+                  [&_br]:content-['']
+                  [&_strong]:font-semibold
+                  [&_em]:italic
+                  [&_ul]:list-disc
+                  [&_ul]:pl-5
+                  [&_ol]:list-decimal
+                  [&_ol]:pl-5
+                  [&_li]:mb-1"
+              >
+                {product.descriptionHtml ? (
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: product.descriptionHtml,
+                    }}
+                  />
+                ) : (
+                  <div className="whitespace-pre-line">
+                    {product.description}
+                  </div>
+                )}
+              </div>
+            )}
 
           </div>
 
